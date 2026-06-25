@@ -40,10 +40,38 @@ The Elixir plant that drives this child lives at
    `libpython3.12.dylib` into `.venv/lib` (the shellHook does this) so `mjpython` can
    dlopen it.
 
-3. **Launch the virtual robot** — a `mix segby.sim` task wires the library's
-   `Sim.Transport` + `Sim.Driver` to `SegbyV1.Sim.MujocoPlant` and brings up the host.
-   _(That launcher is a later chunk; this directory ships the plant, MJCF, child, and
-   deps it needs.)_
+3. **Launch the virtual robot** (pane 1) — from the example app root:
+
+   ```sh
+   cd examples/segby_v1
+   mix segby.sim
+   ```
+
+   `mix segby.sim` wires the library's `Sim.Transport` + `Sim.Driver` to
+   `SegbyV1.Sim.MujocoPlant` and brings up the real `SegbyV1.Host` stack: it injects
+   the SIM transport into the host (so the `LinkOwner` owns it), starts the ~50 Hz
+   driver that steps the plant and injects sensors back up the stack, opens the
+   MuJoCo viewer window, and then blocks (Ctrl-C twice to stop). The MJCF is resolved
+   from `sim/segby.xml` relative to the app root, so run the task from
+   `examples/segby_v1/`.
+
+4. **Attach the dashboard** (pane 2) — in a SECOND terminal, attach `bb_tui` over BB
+   PubSub exactly as against a real robot:
+
+   ```sh
+   cd examples/segby_v1
+   mix bb.tui --robot SegbyV1.Robot
+   ```
+
+   In `bb.tui`: **arm** the robot (`a`), then run the `:teleop` command in the
+   Commands panel with `forward` / `turn` to drive — the bot you see in the MuJoCo
+   window moves. (`:teleop` biases the balance controller's per-wheel effort; it is
+   segby's operator-drive seam — `bb_tui` has no built-in teleop.) Enable the balance
+   loop live from IEx with `SegbyV1.Balance.enable(SegbyV1.Robot)`.
+
+> **Two panes, one robot.** `mix segby.sim` is the long-running virtual robot (it owns
+> the MuJoCo window); `mix bb.tui` is the operator's dashboard. They communicate only
+> over the standard BB PubSub paths — the same way the dashboard talks to a real bot.
 
 ### macOS: `mjpython`, not `python`
 

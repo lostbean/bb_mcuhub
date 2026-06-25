@@ -60,6 +60,14 @@ the host tree with `SegbyV1.Host.start_link(transport_opts: [port: "ttyAMA0"])`,
 attach the dashboard with `mix bb.tui --robot SegbyV1.Robot`, and enable balance
 live with `SegbyV1.Balance.enable(SegbyV1.Robot)`.
 
+## Running it virtually (no hardware)
+
+Run the whole control stack over a MuJoCo physics model with `mix segby.sim` —
+the transport is swapped for the library's sim seam and a viewer window renders
+the bot in 3D (ADR-0008). One-time `cd sim && uv sync`, then `mix segby.sim` in
+one pane and `mix bb.tui --robot SegbyV1.Robot` in another. See
+[`sim/README.md`](sim/README.md).
+
 ## Using this as a template for your own bot
 
 Copy the shape: your own root namespace, your value-types for any non-stock wire
