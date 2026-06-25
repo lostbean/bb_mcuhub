@@ -147,6 +147,15 @@ defmodule Mix.Tasks.Segby.Sim do
     #     POINT of the sim is to watch the bot balance, so the sim turns it on.
     SegbyV1.Balance.enable(@robot)
 
+    # 2d) Start the dashboard Observer (ADR-0004): a host-side reader that samples
+    #     segby's produced slots at its OWN 10 Hz and republishes `Observer.Sample`s
+    #     on `[:observe]`. The TUI subscribes to `[:observe]` (not the control
+    #     firehose) and `SegbyV1.ObserveRenderer` renders the samples — so the
+    #     observer-plane view is live in the sim, exactly as on the Nerves host.
+    #     Best-effort: if it can't start, the dashboard still runs (just without the
+    #     observer panel). Started after the host so PortIndex is built + slots fill.
+    start_observer()
+
     banner(mjcf)
 
     # 3) Launch the bb_tui dashboard IN THIS NODE, in the foreground. The robot tree
@@ -156,7 +165,50 @@ defmodule Mix.Tasks.Segby.Sim do
     #    already-running tree over the standard BB PubSub paths. `BB.TUI.run/2` owns
     #    stdin/stdout and blocks until the dashboard exits — which keeps the whole
     #    supervised tree (host + driver + MuJoCo Port) up until you quit.
-    BB.TUI.run(@robot, [])
+    #
+    #    subscribe_paths feeds the dashboard the slow `[:observe]` stream (the
+    #    Observer above) plus the safety/state/command paths it needs — NOT the full
+    #    `[:sensor]`/`[:actuator]` control firehose. The `:renderers` map teaches the
+    #    TUI to render our `Observer.Sample`s via `SegbyV1.ObserveRenderer` without
+    #    bb_tui knowing that struct (ADR-0004).
+    BB.TUI.run(@robot,
+      subscribe_paths: [
+        [:observe],
+        [:state_machine],
+        [:param],
+        [:command],
+        [:safety]
+      ],
+      renderers: %{[:observe] => SegbyV1.ObserveRenderer}
+    )
+  end
+
+  # Start the dashboard Observer that samples segby's produced slots and republishes
+  # `Observer.Sample`s on `[:observe]` (ADR-0004), mirroring the Nerves host. The
+  # observed slots are the OUT ports worth a glance: chassis pose + forward range,
+  # both wheel statuses (applied/floored), and both wheel speeds (the ADR-0009 vel
+  # sensors — handy while driving). Best-effort: a failure logs and the dashboard
+  # still runs.
+  defp start_observer do
+    opts = [
+      name: SegbyV1.DashboardObserver,
+      robot: @robot,
+      slots: [
+        {:blaster, :pose},
+        {:blaster, :range_front},
+        {:wheels, :status_left},
+        {:wheels, :status_right},
+        {:wheels, :vel_left},
+        {:wheels, :vel_right}
+      ],
+      sample_ms: 100,
+      sink: BBMCUHub.Observer.Sink.PubSub.new(robot: @robot, topic: [:observe])
+    ]
+
+    case BBMCUHub.Observer.start_link(opts) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Mix.shell().info("  (observer not started: #{inspect(reason)})")
+    end
   end
 
   # The MJCF is resolved against the cwd `mix` runs in (the example app root), so
