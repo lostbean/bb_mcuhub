@@ -224,7 +224,26 @@ it is never a second "react to the stop frame" path that could itself fail.
 A slot an actuator hub produces (`{applied_seq, floored?}` at minimum) flowing _up_ the
 wire. It is the authoritative source of "is this hub actually driving?" — read (gated by
 the same born-stale check) instead of inferred from "we sent it a command," so the host
-never shows a confident green while a wheel sits floored.
+never shows a confident green while a wheel sits floored. It is **liveness, not
+measurement**: it is consumed _internally_ by the actuator view's freshness check, never
+published as a `BB.Message` — so a wheel's _measured speed_ is a separate **wheel-speed
+sensor port**, not a status field (ADR-0009).
+
+### Wheel-speed sensor · host velocity loop
+
+A wheel's **measured angular velocity** (rad/s) reported _up_ as a first-class **sensor
+port** (`vel_left`/`vel_right`, value-type `WheelSpeed`, `dir: :out`) — surfaced through
+the same **component** view + `[:sensor | …]` topic the IMU pose uses, so the host
+controller subscribes to it exactly like pose (ADR-0009). The firmware sources it from the
+FOC's closed-loop `shaft_velocity`; the sim from MuJoCo's `qvel`. It exists so the host
+**balance** loop, which is otherwise open-loop on wheel state (it targets pitch only), can
+run an **inner velocity loop**: operator teleop sets a per-wheel _target speed_ and the
+controller adds `kv · (target − measured)` to the per-wheel balance torque. The wheel
+command stays **torque** (faithful to the real torque-voltage FOC); the velocity loop is a
+host control law on top — so "forward" means a _bounded speed_, not an unbounded torque
+(acceleration) bias that runs the wheels away. Distinct from the **status slot**: that is
+liveness; this is measurement. This lives entirely in the **example** (`segby_v1`): a
+consumer value-type + ports on the stock seams (ADR-0003) — the library is untouched.
 
 ### The frame
 

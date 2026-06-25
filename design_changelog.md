@@ -10,6 +10,51 @@ Format: newest first. Dates are absolute.
 
 ---
 
+## 2026-06-25 — A wheel reports its speed as a sensor port; the host closes a velocity loop on top of balance (ADR-0009, design-only)
+
+Driving the (now-balancing) sim bot is unusable: teleop biases the wheels with **torque**,
+but on a balancer torque is acceleration, so any non-trivial forward command runs the
+wheels away and the bot falls — only `forward ≈ 0.001` is usable. The fix every wheeled
+balancer uses is to command **speed**: a velocity loop holds a bounded target rate instead
+of integrating a runaway. The real segby motors already run SimpleFOC closed-loop velocity
+mode (they know their shaft velocity); the information simply never reaches the host, and
+the host never closes a loop on it.
+
+Two constraints shaped the design. (1) The wheel command must stay **torque** — the real
+MKS Dual FOC is driven torque-voltage; swapping the sim to a MuJoCo `<velocity>` actuator
+would make the sim a different plant than the hardware, defeating ADR-0008's sim-to-real
+purpose. So the velocity loop is a host control law _on top of_ torque, not a command-type
+change. (2) The host controller has **no seam to read wheel state today** — `SegbyV1.Balance`
+subscribes only to the IMU pose, and `:status` (`applied_seq`/`floored`) is consumed
+internally by the actuator view's liveness check, never published. So velocity could not
+just be a `:status` field (that would conflate liveness with measurement and still need a
+new read seam).
+
+ADR-0009 resolves both: a wheel's measured speed is a **separate sensor port**
+(`vel_left`/`vel_right`, a new consumer value-type `WheelSpeed` = one `:f32` rad/s,
+`dir: :out`), surfaced through the **same `BB.Sensor` view + `[:sensor | …]` topic the IMU
+pose uses** — so the controller subscribes to it exactly like pose, with no new mechanism
+and `:status` left untouched (liveness stays separate from measurement). The firmware sources
+it from the FOC `shaft_velocity`; the sim plant from MuJoCo's `qvel` (already in the child's
+reply, currently dropped). The host then runs an inner loop: teleop `forward`/`turn` set a
+per-wheel target speed, and the controller adds `kv · (target − measured)` to the per-wheel
+balance torque — so "forward" is a bounded speed, not a runaway acceleration.
+
+**Scope: `examples/segby_v1` only — the `bb_mcuhub` library is NOT changed.** Unlike
+ADRs 0005–0008, this touches no `lib/bb_mcuhub`: `WheelSpeed` is a consumer value-type on
+the stock `BBMCUHub.ValueType` behaviour, `vel_left`/`vel_right` use the stock port DSL,
+and the codec / `BB.Sensor` view / generator / drift test are unchanged library mechanisms
+that already render any consumer's ports. It exercises the library's extensibility (ADR-0003),
+it does not change it. Within the example it is a contract change (two new output ports +
+value-type → regen + drift), it closes a feedback path balance never had (pitch-only →
+wheel-speed-aware), and it changes teleop semantics (speed setpoint, not torque bias).
+Faithful both ways: velocity is _reported_ not commanded, the loop is host-side, so sim and
+hardware run the identical control law over the identical torque plant. Design-only; not yet
+implemented. See ADR-0009 for the proposed control law (numbers tuned against the real loop,
+shown for sign-off) and the per-stratum change map.
+
+---
+
 ## 2026-06-25 — A robot can run virtually: a sim transport closes the host loop over a physics engine (ADR-0008, design-only)
 
 The chassis is not yet assembled, and even once it is, you do not want an un-tuned
