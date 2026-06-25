@@ -169,6 +169,16 @@ both wheels, turn differentials them). Arm/disarm from the safety panel; recall
 the on-chip floor is the real safe-state — disarm/silence both resolve to wheels
 de-energising within 100 ms.
 
+**Disarm-while-balancing — verify it, do not assume it (ADR-0010).** This is the
+one bench check that earlier bring-ups asserted but never ran: with **balance ON
+and the chassis leashed/on a stand**, press **disarm**. The wheels must **go limp
+within ~100 ms** (`SegbyV1.Balance` stops publishing on disarm → command-silence →
+the floor de-energises). The failure mode this guards against is a control loop
+that keeps commanding through disarm — it re-arms the floor every tick and the
+motors never stop. Confirm the bot actually falls limp (not "keeps holding
+upright"), then **re-arm** and confirm balancing resumes. A balancing bot that
+ignores disarm is a safety stop, not a tuning note.
+
 ## Real (hardware-verified values)
 
 These carry bench- and board-verified values — not placeholders:

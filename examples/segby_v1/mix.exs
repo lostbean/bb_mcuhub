@@ -39,7 +39,9 @@ defmodule SegbyV1.MixProject do
       # library's Host.Transport.UART uses it).
       {:bb_mcuhub, path: "../.."},
       # The BeamBots framework — the seam the robot + controllers sit on (§09).
-      {:bb, "~> 0.20"},
+      # Pinned to the lostbean fork: BB.Controller gains handle_safety_state_change
+      # so SegbyV1.Balance can gate its output on disarm (ADR-0010, beam-bots/bb#160).
+      {:bb, github: "lostbean/bb", branch: "feat/controller-safety-state-hook", override: true},
       # The terminal dashboard over the BeamBots seam (§09). ONLY segby uses it, so
       # it lives here (the library no longer depends on bb_tui — ADR-0003). Pinned
       # to a fork (feat/consumer-renderers) that adds two GENERIC, upstreamable

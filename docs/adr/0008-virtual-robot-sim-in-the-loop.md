@@ -154,6 +154,21 @@ each `send/2` and the `Driver` reads them each tick. This is the one real depart
 from the test seam — a test owns the clock; a live demo lets the `Driver` own it — and
 it is why this is a _transport + driver_, not a reuse of `VirtualHub`.
 
+#### Disarm in the sim: the silence comes from the host, not the transport
+
+The sim correctly de-energises on disarm **without any sim-specific e-stop wiring** —
+because disarm is realised the same way it is on hardware: the host **control loop
+falls silent**, and the plant maps "no command for this slot" to that slot's safe
+value (segby: 0 torque → the wheels go limp). When the robot disarms, `SegbyV1.Balance`
+stops publishing (ADR-0010), so no command reaches `Sim.Transport`, so `take_commands`
+reports nothing for the wheel slots, so the plant drives the safe value. **The sim
+transport needs no special disarm handling** — it just keeps capturing whatever
+commands arrive, and disarm means none arrive. (This mirrors the real floor, which
+fires on command-silence; the broadcast `NODE 0x00` frame `LinkOwner.send_disarm`
+emits is the wire accelerator, but the actual safe-state — sim and hardware alike —
+comes from the controller going quiet.) See ADR-0010 for why the controller must be
+the one to fall silent.
+
 Determinism is preserved where it matters: MuJoCo's `mj_step` reads no wall clock, so
 the _cadence_ only sets how fast the human sees motion, never the simulated result.
 A future deterministic test mode can drive the same plant on an explicit step count.

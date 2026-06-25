@@ -219,6 +219,21 @@ same thing at the actuator — _its command `seq` stops advancing_ → the floor
 e-stop only makes the silence happen faster (and, as `NODE 0x00`, wins CAN arbitration);
 it is never a second "react to the stop frame" path that could itself fail.
 
+### A control loop falls silent on disarm
+
+The floor's safe-state is reached by **command-silence** (see _the e-stop_) — which assumes
+the **host stops commanding** on disarm. That is true for a dead parent / cut bus / crashed
+host, but a **control loop is an always-commanding actor** (a self-balancer _must_ command
+every tick to stay upright), so it never goes silent on its own and would re-advance the
+floor's `seq` every tick, **defeating disarm**. So a host control loop (a `BB.Controller`
+that commands actuators) **must gate its own output on the safety state**: it subscribes to
+the safety transitions (`BB.Controller.handle_safety_state_change/2`, the lostbean fork) and
+**publishes nothing while not armed** (seeding armed-ness from `BB.Safety.state` at boot so a
+born-disarmed robot drives nothing). It is the host-side _producer_ of the silence the floor
+waits for — the floor stays the guarantee; the controller supplies the silence. A control
+loop that commands through disarm is a safety bug (ADR-0010). Distinct from **the e-stop**:
+that accelerates the silence on the wire; this is who, on the host, actually creates it.
+
 ### Status slot
 
 A slot an actuator hub produces (`{applied_seq, floored?}` at minimum) flowing _up_ the

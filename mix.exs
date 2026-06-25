@@ -49,8 +49,11 @@ defmodule BBMCUHub.MixProject do
 
   defp deps do
     [
-      # The BeamBots framework — the seam the hub views sit on (§09).
-      {:bb, "~> 0.20"},
+      # The BeamBots framework — the seam the hub views sit on (§09). Pinned to the
+      # lostbean fork for a safety fix: BB.Controller gains handle_safety_state_change
+      # so a long-lived control loop can gate its output on disarm (the BB.Command
+      # path already had this; controllers did not — see ADR-0010 + beam-bots/bb#160).
+      {:bb, github: "lostbean/bb", branch: "feat/controller-safety-state-hook", override: true},
       # The host owns a UART to the root hub (§07); Circuits.UART provides the
       # framing behaviour our COBS+CRC framer implements (§03). A consumer pulls
       # this in transitively (Host.Transport.UART uses it).
