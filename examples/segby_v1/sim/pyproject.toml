@@ -1,0 +1,18 @@
+[project]
+name = "segby-v1-sim"
+version = "0.1.0"
+description = "MuJoCo physics child for running segby_v1 virtually (ADR-0008)"
+# Python 3.12: matches the flake's python312 and the mjpython wheels MuJoCo ships.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  # MuJoCo from PyPI (it does not build on Darwin via nixpkgs; uv installs it into
+  # a project-local .venv — see ../README.md and the repo flake.nix). `mjpython`
+  # ships in this wheel and is what macOS must use for the passive viewer.
+  "mujoco>=3.3",
+  # numpy backs the sensor/qpos arrays the child `.tolist()`s onto the JSON wire.
+  "numpy>=1.26",
+]
+
+[tool.uv]
+# This is a leaf sim tool, not a published package — no build backend needed.
+package = false

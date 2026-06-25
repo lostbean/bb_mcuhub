@@ -37,6 +37,10 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
+        # macOS needs a libpython symlink so the example's `mjpython` viewer works
+        # (ADR-0008); the shellHook below is guarded on this.
+        isDarwin = builtins.match ".*-darwin" system != null;
+
         # treefmt config — one formatter per language in the repo.
         treefmtEval = treefmt-nix.lib.evalModule pkgs {
           projectRootFile = "flake.nix";
@@ -90,6 +94,15 @@
             xz # firmware payload compression
             coreutils-prefixed # GNU coreutils as g-prefixed (Nerves wants `gstat` on macOS)
 
+            # --- example sim stratum (ADR-0008: virtual robot, EXAMPLE-only) ---
+            # The segby_v1 example can run virtually against MuJoCo. MuJoCo itself
+            # comes from PyPI into a project-local .venv via uv (it does not build
+            # on Darwin via nixpkgs); nix only supplies the interpreter + uv. The
+            # shipped library/firmware/host runtime are untouched — this is opt-in
+            # tooling for `examples/segby_v1/sim` (its pyproject.toml + Python child).
+            python312 # the interpreter uv's .venv is built from (mjpython wheels)
+            uv # resolves examples/segby_v1/sim/pyproject.toml into a .venv
+
             # --- shared dev tooling ---
             lefthook # pre-commit format gate (run `lefthook install`)
             git
@@ -104,6 +117,25 @@
             export PLATFORMIO_CORE_DIR="''${PLATFORMIO_CORE_DIR:-$PWD/.pio-core}"
             echo "bb_mcuhub devShell: elixir $(elixir --version | tail -1 | cut -d' ' -f2), $(pio --version)"
             echo "  PLATFORMIO_CORE_DIR=$PLATFORMIO_CORE_DIR"
+          ''
+          # macOS: the example sim's `mjpython` re-execs the .venv python from inside
+          # a Cocoa .app bundle, then dlopens libpython3.12.dylib relative to it via
+          # @executable_path/../lib/. uv's .venv layout doesn't ship that dylib, so
+          # symlink the one from the uv-managed interpreter (ADR-0008). Scoped to the
+          # example's sim .venv; a no-op until `uv sync` has created it.
+          + pkgs.lib.optionalString isDarwin ''
+
+            sim_venv="$PWD/examples/segby_v1/sim/.venv"
+            if [ -f "$sim_venv/bin/python" ] && [ ! -e "$sim_venv/lib/libpython3.12.dylib" ]; then
+              real_python=$(readlink -f "$sim_venv/bin/python" 2>/dev/null || true)
+              if [ -n "$real_python" ]; then
+                py_lib_dir="$(dirname "$(dirname "$real_python")")/lib"
+                if [ -f "$py_lib_dir/libpython3.12.dylib" ]; then
+                  ln -sf "$py_lib_dir/libpython3.12.dylib" "$sim_venv/lib/libpython3.12.dylib"
+                  echo "  [sim] linked libpython3.12.dylib into $sim_venv/lib (mjpython)"
+                fi
+              fi
+            fi
           '';
         };
 
