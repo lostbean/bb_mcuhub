@@ -49,6 +49,10 @@ defmodule SegbyV1.MixProject do
       # SegbyV1.ObserveRenderer renders our Observer.Sample; bb_tui stays generic).
       # ADR-0004. Both changes are upstreamable; see lostbean/bb_tui.
       {:bb_tui, github: "lostbean/bb_tui", branch: "feat/consumer-renderers"},
+      # JSON codec for the sim Port wire to the MuJoCo Python child (ADR-0008).
+      # The plant frames commands/state as JSON-per-line over the Port; this is a
+      # sim-only concern of THIS consumer (the library ships no JSON dep).
+      {:jason, "~> 1.4"},
       {:stream_data, "~> 1.0", only: [:dev, :test]}
     ]
   end
