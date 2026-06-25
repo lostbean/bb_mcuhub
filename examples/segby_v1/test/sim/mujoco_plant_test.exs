@@ -13,12 +13,16 @@ defmodule SegbyV1.Sim.MujocoPlantTest do
   @robot SegbyV1.Robot
 
   # A canned MuJoCo `state` reply: a slight tilt (qx≠0), nonzero gyro/acc, so the
-  # parsed :imu value is unambiguous.
+  # parsed :imu value is unambiguous. The `qvel` carries the wheel hinge angular
+  # velocities at indices 6 (left) and 7 (right) — for segby's freejoint base the
+  # root's 6 DOF occupy qvel[0..5], then the two wheel hinges (verified against
+  # sim/segby.xml: nv=8, wheel dofadr [6, 7]). Distinct + one negative so the two
+  # WheelSpeed sensors are unambiguous: qvel[6] = 2.5 (left), qvel[7] = -1.5 (right).
   @state_line Jason.encode!(%{
                 "event" => "state",
                 "time" => 0.02,
                 "qpos" => [0.0, 0.0, 0.22, 0.999, 0.0436, 0.0, 0.0, 0.1, 0.2],
-                "qvel" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 2.5],
+                "qvel" => [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.5, -1.5],
                 "framequat" => [0.999, 0.0436, 0.0, 0.0],
                 "gyro" => [0.01, -0.02, 0.03],
                 "acc" => [0.4, 0.0, 9.7]
@@ -85,10 +89,12 @@ defmodule SegbyV1.Sim.MujocoPlantTest do
   test "init/1 reads the ready line and resolves slots" do
     {state, _fake} = start_plant([])
 
-    # The blaster pose slot + the two wheel status/motor slots are resolved.
+    # The blaster pose slot + the two wheel status/motor/vel slots are resolved.
     assert {:ok, state.pose_slot} == PortIndex.resolve(:blaster, :pose)
     assert {:ok, state.motor_left_slot} == PortIndex.resolve(:wheels, :motor_left)
     assert {:ok, state.status_left_slot} == PortIndex.resolve(:wheels, :status_left)
+    assert {:ok, state.vel_left_slot} == PortIndex.resolve(:wheels, :vel_left)
+    assert {:ok, state.vel_right_slot} == PortIndex.resolve(:wheels, :vel_right)
   end
 
   test "step/1 writes a ctrl with the left effort at index 0 and right at index 1" do
@@ -172,6 +178,39 @@ defmodule SegbyV1.Sim.MujocoPlantTest do
     # first step → applied_seq advances to 1 on each wheel
     assert lval.applied_seq == 1
     assert rval.applied_seq == 1
+  end
+
+  test "step/1 maps qvel[6]/qvel[7] into two WheelSpeed sensors on the vel slots" do
+    {state, _fake} = start_plant([@state_line])
+
+    {sensors, _state} = MujocoPlant.step(%{}, 0.02, state)
+
+    {:ok, vel_left_slot} = PortIndex.resolve(:wheels, :vel_left)
+    {:ok, vel_right_slot} = PortIndex.resolve(:wheels, :vel_right)
+
+    {vln, vlp} = vel_left_slot
+    {vrn, vrp} = vel_right_slot
+
+    # The sensor tuple carries the value-type MODULE (not a stock atom): the codec
+    # resolves it via BBMCUHub.ValueType.resolve/1, which passes a module through.
+    vel_left =
+      Enum.find(sensors, fn {n, p, type, _v} ->
+        {n, p} == {vln, vlp} and type == SegbyV1.ValueTypes.WheelSpeed
+      end)
+
+    vel_right =
+      Enum.find(sensors, fn {n, p, type, _v} ->
+        {n, p} == {vrn, vrp} and type == SegbyV1.ValueTypes.WheelSpeed
+      end)
+
+    assert {^vln, ^vlp, SegbyV1.ValueTypes.WheelSpeed, lval} = vel_left
+    assert {^vrn, ^vrp, SegbyV1.ValueTypes.WheelSpeed, rval} = vel_right
+
+    # qvel[6] = 2.5 (left), qvel[7] = -1.5 (right), in the WheelSpeed layout.
+    assert lval == %{rad_s: 2.5}
+    assert rval == %{rad_s: -1.5}
+    assert is_float(lval.rad_s)
+    assert is_float(rval.rad_s)
   end
 
   test "applied_seq advances per wheel across successive steps" do

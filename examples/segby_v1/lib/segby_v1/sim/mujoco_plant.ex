@@ -155,6 +155,8 @@ defmodule SegbyV1.Sim.MujocoPlant do
     {:ok, status_right_slot} = PortIndex.resolve(:wheels, :status_right)
     {:ok, motor_left_slot} = PortIndex.resolve(:wheels, :motor_left)
     {:ok, motor_right_slot} = PortIndex.resolve(:wheels, :motor_right)
+    {:ok, vel_left_slot} = PortIndex.resolve(:wheels, :vel_left)
+    {:ok, vel_right_slot} = PortIndex.resolve(:wheels, :vel_right)
 
     state = %{
       child_mod: child_mod,
@@ -166,6 +168,8 @@ defmodule SegbyV1.Sim.MujocoPlant do
       pose_slot: pose_slot,
       status_left_slot: status_left_slot,
       status_right_slot: status_right_slot,
+      vel_left_slot: vel_left_slot,
+      vel_right_slot: vel_right_slot,
       # per-wheel applied_seq counters echoed in the status values.
       applied_left: 0,
       applied_right: 0
@@ -192,10 +196,14 @@ defmodule SegbyV1.Sim.MujocoPlant do
     applied_left = wrap_u16(state.applied_left + 1)
     applied_right = wrap_u16(state.applied_right + 1)
 
+    {vel_left_rad_s, vel_right_rad_s} = wheel_velocities(reply)
+
     sensors = [
       pose_sensor(state.pose_slot, reply),
       status_sensor(state.status_left_slot, applied_left),
-      status_sensor(state.status_right_slot, applied_right)
+      status_sensor(state.status_right_slot, applied_right),
+      wheel_speed_sensor(state.vel_left_slot, vel_left_rad_s),
+      wheel_speed_sensor(state.vel_right_slot, vel_right_rad_s)
     ]
 
     {sensors, %{state | applied_left: applied_left, applied_right: applied_right}}
@@ -246,6 +254,38 @@ defmodule SegbyV1.Sim.MujocoPlant do
   # per-wheel u16 counter.
   defp status_sensor({node, port_id}, applied_seq) do
     {node, port_id, :status, %{applied_seq: applied_seq, floored: false}}
+  end
+
+  # The measured wheel shaft angular velocity (rad/s) reported as the
+  # `SegbyV1.ValueTypes.WheelSpeed` value-type (layout `{rad_s: :f32}`, ADR-0009).
+  # The `type` is the value-type MODULE (not a stock atom like :imu/:status): the
+  # codec resolves it via `BBMCUHub.ValueType.resolve/1`, which passes a module
+  # through unchanged — exactly how the wheels hub names the port
+  # (`type: SegbyV1.ValueTypes.WheelSpeed`).
+  defp wheel_speed_sensor({node, port_id}, rad_s) do
+    {node, port_id, SegbyV1.ValueTypes.WheelSpeed, %{rad_s: rad_s}}
+  end
+
+  # The left/right wheel hinge angular velocities (rad/s) from MuJoCo's `qvel`.
+  #
+  # For segby's freejoint-base model the generalized-velocity (`qvel`) layout is:
+  # the `root` freejoint's 6 DOF first (3 linear + 3 angular, dofadr 0..5), THEN the
+  # two wheel hinges — `wheel_l_joint` at dofadr 6, `wheel_r_joint` at dofadr 7
+  # (verified against sim/segby.xml: nv=8, jnt_dofadr [0, 6, 7]). So the wheel
+  # velocities are `qvel[6]` (left) and `qvel[7]` (right). The child already ships
+  # the full `qvel` in its `state` reply; we read these two indices directly.
+  defp wheel_velocities(reply) do
+    qvel = reply["qvel"]
+    {float_at(qvel, 6), float_at(qvel, 7)}
+  end
+
+  # The qvel element at `i` coerced to float (the child `.tolist()`s numpy arrays,
+  # so a whole value can arrive as an int — normalize). 0.0 if the index is absent.
+  defp float_at(list, i) when is_list(list) do
+    case Enum.at(list, i) do
+      n when is_number(n) -> n * 1.0
+      _ -> 0.0
+    end
   end
 
   # Coerce a JSON number list to exactly `n` floats (the child `.tolist()`s numpy
