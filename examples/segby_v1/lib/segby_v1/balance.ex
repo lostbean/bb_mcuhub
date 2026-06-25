@@ -4,8 +4,10 @@ defmodule SegbyV1.Balance do
   closes the self-balancing loop on the host.
 
   This is the host's control pipeline (a PID balance loop + a complementary-filter
-  IMU estimator + a teleop mixer), wired to the BeamBots
-  seam: it is a **consumer** of the chassis IMU pose and a **producer** of
+  IMU estimator + an **inner velocity loop** that turns operator teleop into a
+  bounded per-wheel target speed), wired to the BeamBots
+  seam: it is a **consumer** of the chassis IMU pose AND the two measured
+  wheel-speed sensor streams, and a **producer** of
   per-wheel effort commands. It NEVER writes a hub command slot — that is the
   actuator view's job (§04 single-writer). It publishes typed
   `BB.Message.Actuator.Command.Effort` messages to each wheel's actuator topic;
@@ -15,8 +17,29 @@ defmodule SegbyV1.Balance do
   ## Pipeline (per pose tick)
 
       pose (BB.Message.Sensor.Imu) → step_pitch/4 (complementary filter)
-        → PID step/3 → torque → teleop mix/4 (forward + turn)
-        → {left, right} → set_effort to both wheels
+        → PID step/3 → balance_torque
+        → velocity_mix/5 (target speed from teleop + kv·(target − measured) per wheel)
+        → {left, right} clamped to output_clamp → set_effort to both wheels
+
+  ## The inner velocity loop (ADR-0009)
+
+  Teleop on a balancing bot CANNOT be a torque bias: torque is acceleration, so a
+  forward torque bias accelerates the wheels forever — they run away and the bot
+  falls. Instead teleop sets a per-wheel **target speed** (rad/s) and the
+  controller closes a velocity loop on top of the balance torque:
+
+      target_left  = forward · max_speed − turn · max_turn_speed
+      target_right = forward · max_speed + turn · max_turn_speed
+      left  = clamp(balance_torque + kv · (target_left  − measured_left),  ±output_clamp)
+      right = clamp(balance_torque + kv · (target_right − measured_right), ±output_clamp)
+
+  So `forward = 0.5` means "roll forward at half of `max_speed` rad/s", a bounded
+  rate the loop holds by bleeding off the speed error — not a runaway. With zero
+  teleop the target is 0 and the loop actively holds the wheels at zero speed
+  (resisting drift). The measured speeds come from the wheels hub's `vel_left` /
+  `vel_right` sensor ports (`SegbyV1.ValueTypes.WheelSpeed` → `JointState`),
+  subscribed below exactly as the IMU pose is. The velocity term is ADDITIVE to
+  the balance torque — it never changes the balance sign.
 
   ## Pitch extraction (accel/gyro complementary filter)
 
@@ -42,22 +65,37 @@ defmodule SegbyV1.Balance do
   ## Gains (segby_v1 config)
 
   `kp 0.5, ki 0.05, kd 0.1, target_pitch 0.0, integral_clamp 1.0, output_clamp
-  1.0`. Teleop mix: `max_forward 0.5, max_turn 0.3`.
+  1.0`. Velocity loop: `max_speed`/`max_turn_speed` (rad/s) bound the teleop
+  target speed, `kv` is the velocity-loop gain. The segby_v1 robot passes the
+  values tuned headless against the real MuJoCo loop (ADR-0009): `max_speed 10.0,
+  max_turn_speed 2.0, kv 0.02` — `kv` deliberately small so the velocity term
+  never saturates the clamp and starves the balance torque, and `max_turn_speed`
+  low because a sustained hard turn destabilizes the pitch-only balance loop
+  (forward driving is fully usable; see `SegbyV1.Robot`).
 
   ## Enable / disable
 
-  Starts **DISABLED** (publishes zero torque every pose tick so the wheels rest
-  and teleop drives directly out of the box). Balance is enabled live by sending
+  Starts **DISABLED** (publishes zero BALANCE torque every pose tick so the chassis
+  is not actively held upright out of the box). Balance is enabled live by sending
   the controller `{:balance_enable, bool}` — use `enable/1` / `disable/1`, which
   resolve the running controller and cast the toggle. Toggling resets the
   integrator so re-enabling never dumps accumulated windup.
 
-  ## Teleop (operator input via bb_tui)
+  The **inner velocity loop still runs while disabled**: with no balance torque the
+  per-wheel output is `kv · (target − measured)`, so an operator can still drive the
+  wheels at a bounded speed with balance off (useful for the bringup bench, where
+  you spin the wheels before trusting the balance loop). Disabling stops the
+  controller actively *balancing*, not driving.
+
+  ## Teleop (operator input via bb_tui) — a bounded SPEED, not a torque
 
   Teleop intent (`forward`, `turn`, both in `[-1.0, 1.0]`) arrives on a PubSub
-  topic (`:teleop_topic`, default `[:teleop, :segby]`) and is mixed ONTO the
-  balance torque every pose tick (`mix/4`); with no operator input the intent is
-  zero and balance torque reaches both wheels unchanged.
+  topic (`:teleop_topic`, default `[:teleop, :segby]`). `forward`/`turn` set a
+  per-wheel **target speed** (rad/s, scaled by `max_speed` / `max_turn_speed`) —
+  "forward = roll forward at a bounded rate", NOT a torque bias. The controller's
+  inner velocity loop adds `kv · (target − measured)` to the balance torque every
+  pose tick (`velocity_mix/5`); with zero teleop the target is 0 and the loop holds
+  the wheels at zero speed.
 
   `bb_tui` has no built-in "teleop" concept — its operator surface is the
   declared-`commands` panel (executed via `BB.Robot.Runtime.execute/3`), the
@@ -82,7 +120,8 @@ defmodule SegbyV1.Balance do
     * `step_pitch/4` — accel/gyro complementary filter → pitch (radians).
     * `pitch_from_accel/3` — accel-only absolute pitch (the filter's anchor term).
     * `pitch_from_imu/1` — quaternion → pitch (radians); unused helper.
-    * `mix/4` — teleop forward/turn mixing onto a `{left, right}` torque.
+    * `velocity_mix/5` — the inner velocity loop: teleop target speed + measured
+      speed + the balance torque → clamped per-wheel `{left, right}` torque.
   """
 
   use BB.Controller,
@@ -107,14 +146,33 @@ defmodule SegbyV1.Balance do
         default: [:teleop, :segby],
         doc: "PubSub topic carrying %{forward, turn} teleop intent"
       ],
+      vel_left_topic: [
+        type: {:list, :atom},
+        default: [:sensor, :base_link, :vel_left],
+        doc: "the measured left-wheel-speed sensor topic (JointState, ADR-0009)"
+      ],
+      vel_right_topic: [
+        type: {:list, :atom},
+        default: [:sensor, :base_link, :vel_right],
+        doc: "the measured right-wheel-speed sensor topic (JointState, ADR-0009)"
+      ],
       kp: [type: :float, default: 0.5, doc: "proportional gain"],
       ki: [type: :float, default: 0.05, doc: "integral gain"],
       kd: [type: :float, default: 0.1, doc: "derivative gain"],
       target_pitch: [type: :float, default: 0.0, doc: "upright set-point, radians"],
       integral_clamp: [type: :float, default: 1.0, doc: "symmetric windup clamp"],
       output_clamp: [type: :float, default: 1.0, doc: "symmetric torque clamp"],
-      max_forward: [type: :float, default: 0.5, doc: "teleop forward bias at |forward|=1"],
-      max_turn: [type: :float, default: 0.3, doc: "teleop turn differential at |turn|=1"],
+      max_speed: [
+        type: :float,
+        default: 10.0,
+        doc: "teleop forward TARGET speed (rad/s) at |forward|=1 (inner velocity loop)"
+      ],
+      max_turn_speed: [
+        type: :float,
+        default: 2.0,
+        doc: "teleop turn differential TARGET speed (rad/s) at |turn|=1"
+      ],
+      kv: [type: :float, default: 0.02, doc: "inner velocity-loop gain (torque per rad/s error)"],
       enabled: [type: :boolean, default: false, doc: "start enabled? (default DISABLED)"]
     ]
 
@@ -244,28 +302,51 @@ defmodule SegbyV1.Balance do
   end
 
   @doc """
-  Pure teleop mix. Given a base `%{left, right}`
-  torque and a teleop intent `%{forward, turn}` (both clamped to `[-1, 1]`),
-  apply forward bias to BOTH wheels and a turn differential between them:
+  Pure inner velocity loop (ADR-0009). Given the `balance_torque` (the PID's
+  upright-holding torque, applied to both wheels), the teleop intent
+  `%{forward, turn}` (both clamped to `[-1, 1]`), the latest measured per-wheel
+  speeds `%{left, right}` (rad/s), and the loop params `%{max_speed,
+  max_turn_speed, kv, output_clamp}`, return the clamped per-wheel torque
+  `%{left, right}`:
 
-      left  = left  + forward*max_forward - turn*max_turn
-      right = right + forward*max_forward + turn*max_turn
+      target_left  = forward · max_speed − turn · max_turn_speed
+      target_right = forward · max_speed + turn · max_turn_speed
+      left  = clamp(balance_torque + kv · (target_left  − measured_left),  ±output_clamp)
+      right = clamp(balance_torque + kv · (target_right − measured_right), ±output_clamp)
 
-  With zero teleop the base `{left, right}` is preserved.
+  The velocity term is ADDITIVE to the balance torque (it never changes the
+  balance sign). With zero teleop the target is 0, so the loop holds the wheels at
+  zero speed. The final per-wheel torque is clamped symmetrically to
+  `output_clamp` so the velocity term cannot blow past the actuator authority.
   """
-  @spec mix(map(), map(), number(), number()) :: map()
-  def mix(%{left: left, right: right} = base, %{forward: fwd, turn: turn}, max_forward, max_turn) do
+  @spec velocity_mix(float(), map(), map(), map()) :: map()
+  def velocity_mix(
+        balance_torque,
+        %{forward: fwd, turn: turn},
+        %{left: measured_left, right: measured_right},
+        %{max_speed: max_speed, max_turn_speed: max_turn_speed, kv: kv, output_clamp: out_clamp}
+      ) do
     fwd = clamp(fwd * 1.0, -1.0, 1.0)
     turn = clamp(turn * 1.0, -1.0, 1.0)
-    fwd_bias = fwd * max_forward
-    turn_bias = turn * max_turn
 
-    %{base | left: left + fwd_bias - turn_bias, right: right + fwd_bias + turn_bias}
+    target_left = fwd * max_speed - turn * max_turn_speed
+    target_right = fwd * max_speed + turn * max_turn_speed
+
+    left = balance_torque + kv * (target_left - measured_left)
+    right = balance_torque + kv * (target_right - measured_right)
+
+    %{
+      left: clamp(left * 1.0, -out_clamp, out_clamp),
+      right: clamp(right * 1.0, -out_clamp, out_clamp)
+    }
   end
 
   defp clamp(v, lo, _hi) when v < lo, do: lo
   defp clamp(v, _lo, hi) when v > hi, do: hi
   defp clamp(v, _lo, _hi), do: v
+
+  # The latest measured per-wheel speeds, shaped for velocity_mix/4.
+  defp measured(%{measured_left: l, measured_right: r}), do: %{left: l, right: r}
 
   # Seconds since the last pose tick (from monotonic nanoseconds). The first
   # sample (or a non-advancing/backwards clock) yields 0.0 — the filter then
@@ -314,14 +395,24 @@ defmodule SegbyV1.Balance do
       bb: bb,
       pose_topic: opts[:pose_topic],
       teleop_topic: opts[:teleop_topic],
+      vel_left_topic: opts[:vel_left_topic],
+      vel_right_topic: opts[:vel_right_topic],
       left_path: opts[:left_actuator_path],
       right_path: opts[:right_actuator_path],
       pid: pid,
       target_pitch: opts[:target_pitch] * 1.0,
-      max_forward: opts[:max_forward] * 1.0,
-      max_turn: opts[:max_turn] * 1.0,
+      # inner velocity-loop params (ADR-0009), pre-bundled for velocity_mix/4.
+      vel_params: %{
+        max_speed: opts[:max_speed] * 1.0,
+        max_turn_speed: opts[:max_turn_speed] * 1.0,
+        kv: opts[:kv] * 1.0,
+        output_clamp: opts[:output_clamp] * 1.0
+      },
       enabled: opts[:enabled],
       last_teleop: %{forward: 0.0, turn: 0.0},
+      # latest measured per-wheel speed (rad/s) from the vel_* sensor streams.
+      measured_left: 0.0,
+      measured_right: 0.0,
       last_mono: nil,
       # running complementary-filter pitch estimate (radians), advanced each tick
       pitch: 0.0
@@ -330,27 +421,31 @@ defmodule SegbyV1.Balance do
     BB.subscribe(bb.robot, state.pose_topic, message_types: [BB.Message.Sensor.Imu])
     BB.subscribe(bb.robot, state.teleop_topic)
 
+    BB.subscribe(bb.robot, state.vel_left_topic, message_types: [BB.Message.Sensor.JointState])
+    BB.subscribe(bb.robot, state.vel_right_topic, message_types: [BB.Message.Sensor.JointState])
+
     {:ok, state}
   end
 
-  # A pose tick while DISABLED: zero BALANCE torque (so the wheels rest), but
-  # still mix teleop on top — with balance off, teleop drives the wheels directly.
-  # Do NOT advance the PID (no windup while off), but
-  # DO advance the complementary filter so the pitch estimate stays live for a
-  # clean re-enable (no settling jump on the first enabled tick).
+  # A pose tick while DISABLED: zero BALANCE torque (the chassis is not actively
+  # held upright), but the inner velocity loop STILL runs — so an operator can
+  # drive the wheels at a bounded target speed with balance off (`balance_torque =
+  # 0`, output = `kv·(target − measured)`). Do NOT advance the PID (no windup while
+  # off), but DO advance the complementary filter so the pitch estimate stays live
+  # for a clean re-enable (no settling jump on the first enabled tick).
   @impl BB.Controller
   def handle_info(
         {:bb, topic, %BB.Message{payload: %BB.Message.Sensor.Imu{} = imu} = msg},
         %{pose_topic: topic, enabled: false} = state
       ) do
     pitch = step_pitch(state.pitch, imu, dt_since(state, msg))
-    mixed = mix(%{left: 0.0, right: 0.0}, state.last_teleop, state.max_forward, state.max_turn)
-    command(state, mixed)
+    command(state, velocity_mix(0.0, state.last_teleop, measured(state), state.vel_params))
     {:noreply, %{state | last_mono: msg.monotonic_time, pitch: pitch}}
   end
 
   # A pose tick while ENABLED: accel/gyro complementary filter → pitch → PID →
-  # torque, mix teleop, command both wheels.
+  # balance_torque, then the inner velocity loop (teleop target speed + measured
+  # speed) on top, command both wheels.
   def handle_info(
         {:bb, topic, %BB.Message{payload: %BB.Message.Sensor.Imu{} = imu} = msg},
         %{pose_topic: topic} = state
@@ -361,12 +456,26 @@ defmodule SegbyV1.Balance do
     error = state.target_pitch - pitch
     {torque, new_pid} = step(state.pid, error, dt_s)
 
-    mixed =
-      mix(%{left: torque, right: torque}, state.last_teleop, state.max_forward, state.max_turn)
-
-    command(state, mixed)
+    command(state, velocity_mix(torque, state.last_teleop, measured(state), state.vel_params))
 
     {:noreply, %{state | pid: new_pid, last_mono: msg.monotonic_time, pitch: pitch}}
+  end
+
+  # A measured wheel-speed reading on the left vel topic (ADR-0009): keep the
+  # latest measured speed for the inner velocity loop. The lifted JointState
+  # carries this one wheel's velocity as `velocities: [rad_s | _]`.
+  def handle_info(
+        {:bb, topic, %BB.Message{payload: %BB.Message.Sensor.JointState{velocities: [v | _]}}},
+        %{vel_left_topic: topic} = state
+      ) do
+    {:noreply, %{state | measured_left: v * 1.0}}
+  end
+
+  def handle_info(
+        {:bb, topic, %BB.Message{payload: %BB.Message.Sensor.JointState{velocities: [v | _]}}},
+        %{vel_right_topic: topic} = state
+      ) do
+    {:noreply, %{state | measured_right: v * 1.0}}
   end
 
   # Teleop intent on the PubSub topic — the bb_tui path. The Teleop command's

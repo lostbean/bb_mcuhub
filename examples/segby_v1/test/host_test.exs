@@ -98,14 +98,16 @@ defmodule SegbyV1.HostTest do
     end
   end
 
-  describe "teleop loop closed: a bb_tui-delivered intent biases the wire" do
-    test "running the :teleop command biases the per-wheel effort on the wire",
+  describe "teleop loop closed: a bb_tui-delivered intent drives the wire" do
+    test "running the :teleop command drives the per-wheel velocity loop on the wire",
          %{transport: transport} do
       {:ok, left_slot} = PortIndex.resolve(:wheels, :motor_left)
       {:ok, right_slot} = PortIndex.resolve(:wheels, :motor_right)
 
-      # balance stays DISABLED so the PID torque is ~0 and the teleop bias is the
-      # whole signal — the cleanest proof the intent reached the wheels.
+      # balance stays DISABLED so the PID torque is ~0 and the velocity-loop term is
+      # the whole signal — the cleanest proof the intent reached the wheels. With
+      # balance off the inner velocity loop STILL runs (ADR-0009), so forward
+      # teleop drives the wheels. No vel stream is injected here, so measured ≈ 0.
       # Deliver teleop the bb_tui way: execute the declared :teleop command.
       {:ok, cmd} = BB.Robot.Runtime.execute(@robot, :teleop, %{forward: 1.0, turn: 0.0})
       _ = BB.Command.await(cmd)
@@ -120,9 +122,10 @@ defmodule SegbyV1.HostTest do
       left = await_wire_effort(transport, left_slot)
       right = await_wire_effort(transport, right_slot)
 
-      # max_forward 0.5 with forward 1.0 → +0.5 onto both wheels (turn 0).
-      assert_in_delta left, 0.5, 1.0e-3
-      assert_in_delta right, 0.5, 1.0e-3
+      # forward 1.0 → target = max_speed (10.0) rad/s; measured ≈ 0 → the velocity
+      # term is kv·(10.0 - 0) = 0.02·10.0 = 0.20 onto both wheels (turn 0).
+      assert_in_delta left, 0.20, 1.0e-2
+      assert_in_delta right, 0.20, 1.0e-2
     end
 
     test "the controller's BB.Message Twist path updates last_teleop directly" do
@@ -133,6 +136,8 @@ defmodule SegbyV1.HostTest do
           bb: %{robot: @robot, path: [:balance]},
           pose_topic: [:sensor, :base_link, :chassis_imu],
           teleop_topic: [:teleop, :segby],
+          vel_left_topic: [:sensor, :base_link, :vel_left],
+          vel_right_topic: [:sensor, :base_link, :vel_right],
           left_actuator_path: [:t, :l],
           right_actuator_path: [:t, :r],
           kp: 0.5,
@@ -141,8 +146,9 @@ defmodule SegbyV1.HostTest do
           target_pitch: 0.0,
           integral_clamp: 1.0,
           output_clamp: 1.0,
-          max_forward: 0.5,
-          max_turn: 0.3,
+          max_speed: 10.0,
+          max_turn_speed: 2.0,
+          kv: 0.02,
           enabled: true
         )
 

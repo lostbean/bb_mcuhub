@@ -7,7 +7,8 @@ defmodule SegbyV1.BalanceTest do
     * the PURE cores — `step/3` (the PID),
       `step_pitch/4` (the accel/gyro complementary filter — the LIVE pitch source),
       `pitch_from_imu/1` (quaternion → pitch — an unused helper), and
-      `mix/4` (teleop forward/turn) — exercised directly, no process.
+      `velocity_mix/4` (the inner velocity loop — teleop target speed + measured
+      speed + balance torque, ADR-0009) — exercised directly, no process.
     * an integration layer — the controller driven by synthetic pose messages
       through the real BB PubSub seam, asserting it publishes `Effort` to BOTH
       wheel actuator topics when enabled and zero when disabled (and never writes
@@ -190,37 +191,81 @@ defmodule SegbyV1.BalanceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Pure teleop mix
+  # Pure inner velocity loop (ADR-0009)
   # ---------------------------------------------------------------------------
-  describe "mix/4 — teleop forward/turn" do
-    test "zero teleop preserves the base torque" do
-      base = %{left: 0.3, right: 0.3}
-      assert Balance.mix(base, %{forward: 0.0, turn: 0.0}, 0.5, 0.3) == base
-    end
+  describe "velocity_mix/4 — the inner velocity loop" do
+    # max_speed 10, max_turn_speed 4, kv 0.1, output_clamp big enough not to bite.
+    @vp %{max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1, output_clamp: 100.0}
+    @zero %{left: 0.0, right: 0.0}
 
-    test "forward bias adds equally to BOTH wheels" do
-      mixed = Balance.mix(%{left: 0.0, right: 0.0}, %{forward: 1.0, turn: 0.0}, 0.5, 0.3)
-      assert_in_delta mixed.left, 0.5, 1.0e-9
-      assert_in_delta mixed.right, 0.5, 1.0e-9
-    end
-
-    test "turn differentials the wheels (right +, left -)" do
-      mixed = Balance.mix(%{left: 0.0, right: 0.0}, %{forward: 0.0, turn: 1.0}, 0.5, 0.3)
-      assert_in_delta mixed.left, -0.3, 1.0e-9
+    test "zero teleop + zero measured -> just the balance torque on both wheels" do
+      mixed = Balance.velocity_mix(0.3, %{forward: 0.0, turn: 0.0}, @zero, @vp)
+      assert_in_delta mixed.left, 0.3, 1.0e-9
       assert_in_delta mixed.right, 0.3, 1.0e-9
     end
 
-    test "forward + turn combine (left = base + fwd - turn, right = base + fwd + turn)" do
-      mixed = Balance.mix(%{left: 0.1, right: 0.1}, %{forward: 1.0, turn: 1.0}, 0.5, 0.3)
-      assert_in_delta mixed.left, 0.1 + 0.5 - 0.3, 1.0e-9
-      assert_in_delta mixed.right, 0.1 + 0.5 + 0.3, 1.0e-9
+    test "zero teleop but nonzero measured -> the loop resists drift (holds zero speed)" do
+      # measured +2 rad/s on both, target 0 -> kv·(0 - 2) = -0.2 added to balance.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 0.0}, %{left: 2.0, right: 2.0}, @vp)
+      assert_in_delta mixed.left, -0.2, 1.0e-9
+      assert_in_delta mixed.right, -0.2, 1.0e-9
     end
 
-    test "teleop intent is clamped to [-1, 1] before scaling" do
-      mixed = Balance.mix(%{left: 0.0, right: 0.0}, %{forward: 5.0, turn: -5.0}, 0.5, 0.3)
-      # forward clamps to 1.0 -> +0.5; turn clamps to -1.0 -> ∓0.3
-      assert_in_delta mixed.left, 0.5 + 0.3, 1.0e-9
-      assert_in_delta mixed.right, 0.5 - 0.3, 1.0e-9
+    test "forward target adds kv·(target - measured) equally to BOTH wheels" do
+      # forward 1.0 -> target 10 rad/s; measured 0 -> kv·10 = 1.0 on top of balance.
+      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 0.0}, @zero, @vp)
+      assert_in_delta mixed.left, 1.0, 1.0e-9
+      assert_in_delta mixed.right, 1.0, 1.0e-9
+    end
+
+    test "the velocity term is ADDITIVE to the balance torque (sign preserved)" do
+      # a corrective balance torque of -0.5 + a small forward velocity push.
+      mixed = Balance.velocity_mix(-0.5, %{forward: 0.2, turn: 0.0}, @zero, @vp)
+      # target 2 rad/s, measured 0 -> +0.2; -0.5 + 0.2 = -0.3 (still negative).
+      assert_in_delta mixed.left, -0.3, 1.0e-9
+      assert_in_delta mixed.right, -0.3, 1.0e-9
+    end
+
+    test "the controller adds exactly kv·(target - measured) for a given measured speed" do
+      # forward 0.5 -> target 5 rad/s; measured 1.5 -> error 3.5; kv 0.1 -> +0.35.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.5, turn: 0.0}, %{left: 1.5, right: 1.5}, @vp)
+      assert_in_delta mixed.left, 0.1 * (5.0 - 1.5), 1.0e-9
+      assert_in_delta mixed.right, 0.1 * (5.0 - 1.5), 1.0e-9
+    end
+
+    test "turn differentials the target speed (right +, left -)" do
+      # turn 1.0 -> target_left -4, target_right +4; measured 0 -> kv·∓4 = ∓0.4.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, @vp)
+      assert_in_delta mixed.left, -0.4, 1.0e-9
+      assert_in_delta mixed.right, 0.4, 1.0e-9
+    end
+
+    test "forward + turn combine into the per-wheel target speed" do
+      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 1.0}, @zero, @vp)
+      # left target = 10 - 4 = 6 -> +0.6; right target = 10 + 4 = 14 -> +1.4.
+      assert_in_delta mixed.left, 0.6, 1.0e-9
+      assert_in_delta mixed.right, 1.4, 1.0e-9
+    end
+
+    test "teleop intent is clamped to [-1, 1] before scaling to a target speed" do
+      mixed = Balance.velocity_mix(0.0, %{forward: 5.0, turn: -5.0}, @zero, @vp)
+      # forward clamps to 1.0 -> target 10; turn clamps to -1.0 -> ±4.
+      # left = 10 - (-4) = 14 -> +1.4; right = 10 + (-4) = 6 -> +0.6.
+      assert_in_delta mixed.left, 1.4, 1.0e-9
+      assert_in_delta mixed.right, 0.6, 1.0e-9
+    end
+
+    test "the final per-wheel torque is clamped symmetrically to output_clamp" do
+      vp = %{max_speed: 100.0, max_turn_speed: 0.0, kv: 1.0, output_clamp: 1.0}
+      # target 100, measured 0 -> +100, plus balance 0.5 -> clamped to +1.0.
+      mixed = Balance.velocity_mix(0.5, %{forward: 1.0, turn: 0.0}, @zero, vp)
+      assert mixed.left == 1.0
+      assert mixed.right == 1.0
+
+      # negative side clamps too.
+      mixed2 = Balance.velocity_mix(-0.5, %{forward: -1.0, turn: 0.0}, @zero, vp)
+      assert mixed2.left == -1.0
+      assert mixed2.right == -1.0
     end
   end
 
@@ -234,6 +279,9 @@ defmodule SegbyV1.BalanceTest do
     # real views (not started here) can't compete.
     @left [:test, :left_drive]
     @right [:test, :right_drive]
+    # the measured-wheel-speed sensor topics (ADR-0009) the velocity loop reads.
+    @vel_left_topic [:sensor, :base_link, :vel_left]
+    @vel_right_topic [:sensor, :base_link, :vel_right]
 
     setup do
       # A real BB PubSub registry for this robot, so BB.subscribe / BB.publish
@@ -297,13 +345,15 @@ defmodule SegbyV1.BalanceTest do
       assert drain_last_effort([:actuator | @left]) < 0.0
     end
 
-    test "teleop forward intent biases both wheels on top of balance" do
-      ctrl = start_controller(enabled: true)
+    test "teleop forward intent drives the velocity loop on top of balance" do
+      # max_speed 10, kv 0.1 -> forward 1.0 = target 10 rad/s; measured 0 (no vel
+      # stream injected) -> kv·(10 - 0) = +1.0 on top of the (~0) balance torque.
+      ctrl = start_controller(enabled: true, max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1)
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
 
-      # level pose so the PID torque is ~0; pure teleop bias should show through.
+      # level pose so the PID torque is ~0; the pure velocity term should show through.
       send(ctrl, {:teleop, %{forward: 1.0, turn: 0.0}})
       send(ctrl, pose_msg(0.0, 0))
       send(ctrl, pose_msg(0.0, 10_000_000))
@@ -311,9 +361,30 @@ defmodule SegbyV1.BalanceTest do
       left = drain_last_effort([:actuator | @left])
       right = drain_last_effort([:actuator | @right])
 
-      # max_forward 0.5 added to both wheels
-      assert_in_delta left, 0.5, 1.0e-6
-      assert_in_delta right, 0.5, 1.0e-6
+      assert_in_delta left, 1.0, 1.0e-6
+      assert_in_delta right, 1.0, 1.0e-6
+    end
+
+    test "a measured wheel speed bleeds the velocity error (kv·(target - measured))" do
+      ctrl = start_controller(enabled: true, max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1)
+
+      BB.subscribe(@robot, [:actuator | @left])
+      BB.subscribe(@robot, [:actuator | @right])
+
+      # forward 1.0 -> target 10 rad/s. Report both wheels already at 4 rad/s, so
+      # the velocity error is 6 and the contribution is kv·6 = +0.6.
+      send(ctrl, {:teleop, %{forward: 1.0, turn: 0.0}})
+      send(ctrl, vel_msg(@vel_left_topic, 4.0))
+      send(ctrl, vel_msg(@vel_right_topic, 4.0))
+      send(ctrl, pose_msg(0.0, 0))
+      send(ctrl, pose_msg(0.0, 10_000_000))
+
+      left = drain_last_effort([:actuator | @left])
+      right = drain_last_effort([:actuator | @right])
+
+      # kv 0.1 · (10 - 4) = 0.6 on top of the ~0 balance torque.
+      assert_in_delta left, 0.6, 1.0e-6
+      assert_in_delta right, 0.6, 1.0e-6
     end
   end
 
@@ -347,6 +418,8 @@ defmodule SegbyV1.BalanceTest do
         bb: %{robot: @robot, path: [:balance]},
         pose_topic: @pose_topic,
         teleop_topic: [:teleop, :segby_test],
+        vel_left_topic: @vel_left_topic,
+        vel_right_topic: @vel_right_topic,
         left_actuator_path: @left,
         right_actuator_path: @right,
         kp: 0.5,
@@ -355,8 +428,9 @@ defmodule SegbyV1.BalanceTest do
         target_pitch: 0.0,
         integral_clamp: 1.0,
         output_clamp: 1.0,
-        max_forward: 0.5,
-        max_turn: 0.3,
+        max_speed: 10.0,
+        max_turn_speed: 2.0,
+        kv: 0.02,
         enabled: false
       ]
       |> Keyword.merge(extra)
@@ -384,6 +458,27 @@ defmodule SegbyV1.BalanceTest do
     }
 
     {:bb, @pose_topic, msg}
+  end
+
+  # A measured-wheel-speed message as the vel_* sensor view would publish it
+  # (ADR-0009): a `JointState` carrying this one wheel's velocity (rad/s). The
+  # velocity loop reads `velocities: [rad_s | _]` from it.
+  defp vel_msg(topic, rad_s) do
+    msg = %BB.Message{
+      monotonic_time: 0,
+      wall_time: 0,
+      node: Node.self(),
+      frame_id: :wheel_speed,
+      payload: %BB.Message.Sensor.JointState{
+        names: [:wheel],
+        positions: [],
+        velocities: [rad_s * 1.0],
+        efforts: []
+      },
+      robot: @robot
+    }
+
+    {:bb, topic, msg}
   end
 
   # Wait for at least one Effort published on `topic` and return the last one's

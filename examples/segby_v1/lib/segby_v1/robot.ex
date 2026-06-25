@@ -47,10 +47,31 @@ defmodule SegbyV1.Robot do
       :balance,
       {
         SegbyV1.Balance,
-        # Tuned against the real closed loop in the MuJoCo sim (ADR-0008): holds the
-        # bot upright and recovers from a nudge to <1°. kd stays small — a large
-        # derivative destabilizes on the noisy 100 Hz loop with clamp saturation.
-        # (The absolute drive sign is set by the sim MJCF actuator gear, not here.)
+        # PID gains tuned against the real closed loop in the MuJoCo sim (ADR-0008):
+        # holds the bot upright and recovers from a nudge to <1°. kd stays small — a
+        # large derivative destabilizes on the noisy 100 Hz loop with clamp
+        # saturation. (Absolute drive sign is set by the sim MJCF actuator gear.)
+        #
+        # Inner velocity loop (ADR-0009): teleop sets a per-wheel TARGET SPEED
+        # (rad/s) and the controller adds kv·(target − measured) to the balance
+        # torque, clamped to output_clamp. kv / max_speed / max_turn_speed were
+        # tuned HEADLESS against the real SegbyV1.Balance + MuJoCo loop:
+        #
+        #   * kv is SMALL (0.02) on purpose — the balancer naturally spins the wheels
+        #     fast to stay upright, so a large kv makes the velocity term saturate the
+        #     ±output_clamp and starve the balance torque (kv≥0.04 topples at
+        #     forward=1.0). At 0.02, forward∈[0,1] drives a smooth, DURABLE steady
+        #     roll (forward=0.5 → ~4.9 rad/s, forward=1.0 → ~13 rad/s, |pitch|<1°
+        #     sustained — replacing the old torque-bias regime where only
+        #     forward≈0.001 was usable).
+        #   * max_turn_speed is kept LOW (2.0). Turning is the soft spot: the balance
+        #     PID only senses PITCH (fore-aft), so a sustained differential (turn)
+        #     command slowly pumps yaw-coupled energy the loop can't reject and the
+        #     bot eventually topples — independent of how small the gain is. Gentle
+        #     turns (turn ≲ 0.3 sustained, or brief taps) yaw cleanly and hold;
+        #     hard SUSTAINED full turns are a known limitation (ADR-0009 follow-up:
+        #     a yaw-aware term / IMU yaw feedback would be needed to make full
+        #     sustained turning stable).
         pose_topic: [:sensor, :base_link, :chassis_imu],
         left_actuator_path: [:base_link, :left_wheel, :left_drive],
         right_actuator_path: [:base_link, :right_wheel, :right_drive],
@@ -60,8 +81,9 @@ defmodule SegbyV1.Robot do
         target_pitch: 0.0,
         integral_clamp: 1.0,
         output_clamp: 1.0,
-        max_forward: 0.5,
-        max_turn: 0.3,
+        max_speed: 10.0,
+        max_turn_speed: 2.0,
+        kv: 0.02,
         enabled: false
       }
     )
@@ -69,21 +91,22 @@ defmodule SegbyV1.Robot do
 
   commands do
     # Operator teleop from the dashboard (§09). bb_tui's Commands panel runs this
-    # via the runtime; its handler publishes a Twist onto the balance
-    # controller's teleop topic, which biases the per-wheel effort. `allowed_states
-    # [:*]` so an operator can teleop in any non-disarmed state.
+    # via the runtime; its handler publishes a Twist onto the balance controller's
+    # teleop topic, which sets a per-wheel TARGET SPEED for the inner velocity loop
+    # (ADR-0009 — NOT a torque bias). `allowed_states [:*]` so an operator can
+    # teleop in any non-disarmed state.
     command :teleop do
       handler(SegbyV1.Teleop)
       allowed_states([:*])
 
       argument :forward, :float do
         default(0.0)
-        doc("forward bias in [-1.0, 1.0] (mixed onto BOTH wheels)")
+        doc("forward TARGET SPEED in [-1.0, 1.0] — roll at a bounded rate (scaled by max_speed)")
       end
 
       argument :turn, :float do
         default(0.0)
-        doc("turn differential in [-1.0, 1.0] (right +, left -)")
+        doc("turn TARGET SPEED in [-1.0, 1.0] — differential yaw rate (scaled by max_turn_speed)")
       end
     end
   end
