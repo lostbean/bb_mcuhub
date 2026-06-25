@@ -13,7 +13,9 @@ defmodule SegbyV1.RobotTest do
       (in/`SegbyV1.ValueTypes.Led`, decorative — no floor).
     * Wheels (NODE 0x05), ONE Dual FOC leaf driving both wheels: `motor_left` /
       `motor_right` (in/effort, each its own floor) + `status_left` /
-      `status_right` (out/status).
+      `status_right` (out/status) + `vel_left` / `vel_right`
+      (out/`SegbyV1.ValueTypes.WheelSpeed`, the measured-speed sensor stream,
+      ADR-0009).
 
   The range/led ports name CONSUMER-defined value-types BY MODULE (the extension
   seam, ADR-0003): `BBMCUHub.ValueType.resolve/1` passes a module through, so the
@@ -38,9 +40,10 @@ defmodule SegbyV1.RobotTest do
   test "the segby_v1 robot projects a non-empty IR (it compiled — the verifier passed)",
        %{ir: ir} do
     assert is_list(ir)
-    # 3 blaster ports (pose, range_front, status_led) + 4 wheels ports
-    # (motor_left/right, status_left/right)
-    assert length(ir) == 7
+    # 3 blaster ports (pose, range_front, status_led) + 6 wheels ports
+    # (motor_left/right, status_left/right, vel_left/right — the measured-speed
+    # sensor stream, ADR-0009)
+    assert length(ir) == 9
   end
 
   test "topology is declared by parent links: root Blaster + UART-linked Wheels leaf (ADR-0006)",
@@ -117,6 +120,21 @@ defmodule SegbyV1.RobotTest do
     end
 
     assert sl.port_id != sr.port_id
+
+    # each wheel also reports its MEASURED shaft speed as a SENSOR stream
+    # (ADR-0009): a CONSUMER value-type named BY MODULE, dir :out, not :status.
+    vl = Map.fetch!(by, {:wheels, :vel_left})
+    vr = Map.fetch!(by, {:wheels, :vel_right})
+
+    for vel <- [vl, vr] do
+      assert vel.node == 0x05
+      assert vel.dir == :out
+      assert vel.type == SegbyV1.ValueTypes.WheelSpeed
+      assert vel.parent == :blaster
+      assert vel.uplink == :uart
+    end
+
+    assert vl.port_id != vr.port_id
   end
 
   test "no two ports share a wire identity {node, port_id} (§03)", %{ir: ir} do

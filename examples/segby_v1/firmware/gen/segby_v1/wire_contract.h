@@ -32,8 +32,10 @@
 #define PORT_BLASTER_STATUS_LED 0xCE
 #define PORT_BLASTER_POSE 0xD3
 #define PORT_WHEELS_MOTOR_LEFT 0x18
+#define PORT_WHEELS_VEL_LEFT 0x1C
 #define PORT_WHEELS_STATUS_LEFT 0x8A
 #define PORT_WHEELS_STATUS_RIGHT 0xB4
+#define PORT_WHEELS_VEL_RIGHT 0xCC
 #define PORT_WHEELS_MOTOR_RIGHT 0xE0
 
 /* Which ports carry t_dev (1) vs omit it (0) — see §04. */
@@ -41,8 +43,10 @@
 #define PORT_BLASTER_STATUS_LED_STAMPED 0
 #define PORT_BLASTER_POSE_STAMPED 1
 #define PORT_WHEELS_MOTOR_LEFT_STAMPED 0
+#define PORT_WHEELS_VEL_LEFT_STAMPED 0
 #define PORT_WHEELS_STATUS_LEFT_STAMPED 0
 #define PORT_WHEELS_STATUS_RIGHT_STAMPED 0
+#define PORT_WHEELS_VEL_RIGHT_STAMPED 0
 #define PORT_WHEELS_MOTOR_RIGHT_STAMPED 0
 
 /* Decode-time lookup: does the frame for (node, port) carry t_dev? The
@@ -63,6 +67,10 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
   float distance_m;
 } Range;
+
+typedef struct __attribute__((packed)) {
+  float rad_s;
+} WheelSpeed;
 
 typedef struct __attribute__((packed)) {
   float nm;
@@ -97,6 +105,6 @@ static const uint8_t SAFE_WHEELS_MOTOR_LEFT[] = { 0x00, 0x00, 0x00, 0x00 }; /* p
 static const uint8_t SAFE_WHEELS_MOTOR_RIGHT[] = { 0x00, 0x00, 0x00, 0x00 }; /* packed safe_action %{nm: 0.0} */
 
 /* Contract hash — the drift test compares this. */
-#define WIRE_CONTRACT_SHA "8c21647141efaaaf"
+#define WIRE_CONTRACT_SHA "058227399e379332"
 
 #endif /* BB_MCUHUB_WIRE_CONTRACT_H */

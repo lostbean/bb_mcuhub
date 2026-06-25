@@ -38,6 +38,14 @@
     crc: 0x5011
   },
   %{
+    hub: :wheels, port: :vel_left, type: SegbyV1.ValueTypes.WheelSpeed,
+    node: 0x05, port_id: 0x1C,
+    seq: 42, t_dev: 1234, stamped: false,
+    value: %{rad_s: 1.0},
+    body: <<0x5, 0x1C, 0x0, 0x2A, 0x3F, 0x80, 0x0, 0x0>>,
+    crc: 0x91D7
+  },
+  %{
     hub: :wheels, port: :status_left, type: :status,
     node: 0x05, port_id: 0x8A,
     seq: 42, t_dev: 1234, stamped: false,
@@ -52,6 +60,14 @@
     value: %{applied_seq: 7, floored: false},
     body: <<0x5, 0xB4, 0x0, 0x2A, 0x0, 0x7, 0x0>>,
     crc: 0xB316
+  },
+  %{
+    hub: :wheels, port: :vel_right, type: SegbyV1.ValueTypes.WheelSpeed,
+    node: 0x05, port_id: 0xCC,
+    seq: 42, t_dev: 1234, stamped: false,
+    value: %{rad_s: 1.0},
+    body: <<0x5, 0xCC, 0x0, 0x2A, 0x3F, 0x80, 0x0, 0x0>>,
+    crc: 0xD0B9
   },
   %{
     hub: :wheels, port: :motor_right, type: :effort,

@@ -15,7 +15,8 @@ void wheels_device_setup(void); /* one-time bring-up (pins, peripherals,
                                     FOC/encoder init). May take as long as it
                                     needs: the task watchdog is armed AFTER this
                                     returns, so a slow initFOC/i2c settle is safe. */
-
+bool wheels_vel_left_read(WheelSpeed *out); /* bounded read; false on timeout */
+bool wheels_vel_right_read(WheelSpeed *out); /* bounded read; false on timeout */
 void wheels_motor_left_drive(float); /* apply to the plant */
 void wheels_motor_right_drive(float); /* apply to the plant */
 void wheels_post_control(void); /* OPTIONAL: per-loop telemetry. To provide one, `#define WHEELS_POST_CONTROL_OVERRIDE` before #include'ing wheels.glue.h; else a no-op default is used. */

@@ -102,6 +102,20 @@ defmodule SegbyV1.Robot do
         {BBMCUHub.BBHub.Sensor, hub: :blaster, port: :range_front, fresh_for: 3, beat_ms: 50}
       )
 
+      # measured wheel speeds (ADR-0009) — BB.Sensor views over the wheels hub's
+      # velocity ports, published on `[:sensor | …]` exactly like the IMU pose so
+      # the balance loop can read them for its inner velocity loop. beat_ms 20 =
+      # 50 Hz, matching the ports' rate.
+      sensor(
+        :vel_left,
+        {BBMCUHub.BBHub.Sensor, hub: :wheels, port: :vel_left, fresh_for: 3, beat_ms: 20}
+      )
+
+      sensor(
+        :vel_right,
+        {BBMCUHub.BBHub.Sensor, hub: :wheels, port: :vel_right, fresh_for: 3, beat_ms: 20}
+      )
+
       # left wheel — a BB.Actuator view over the wheels hub's left command port,
       # reading its left status slot for liveness (§05). fresh_for is the
       # command's consumer window (§04); the hub's own floor is the safe state.

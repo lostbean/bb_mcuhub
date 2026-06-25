@@ -43,7 +43,9 @@ static uint16_t g_applied_seq_motor_left = 0;  /* last command seq we handed the
 static Floor g_floor_motor_right;
 static uint16_t g_applied_seq_motor_right = 0;  /* last command seq we handed the floor */
 #define FLOOR_WINDOW_MS_MOTOR_RIGHT (FLOOR_MISSES_WHEELS_MOTOR_RIGHT * CMD_PERIOD_MS_WHEELS_MOTOR_RIGHT)
-
+/* Per-sensor seq — advanced only on a real new value (§04). */
+static uint16_t g_seq_vel_left = 0;
+static uint16_t g_seq_vel_right = 0;
 /* Per-status-port seq. */
 static uint16_t g_status_seq_status_left = 0;
 static uint16_t g_status_seq_status_right = 0;
@@ -119,7 +121,45 @@ static void status_right_sample_tick(uint32_t now_us) {
 
   link_send_up(&f);
 }
+/* Sense vel_left (§08): one bounded read, pack big-endian, send up. A read
+   that fails returns → no write → the seq stalls → the reader goes stale. */
+static void vel_left_sample_tick(uint32_t now_us) {
+  WheelSpeed raw;
+  if (!wheels_vel_left_read(&raw)) return;
 
+  Frame f;
+  f.node = MY_NODE;
+  f.port = PORT_WHEELS_VEL_LEFT;
+  f.seq = ++g_seq_vel_left;        /* advance only on a real new value */
+  f.stamped = PORT_WHEELS_VEL_LEFT_STAMPED;
+  f.t_dev = 0;
+  (void)now_us;
+
+  be_put_f32(&f.payload[0], raw.rad_s);
+  f.payload_len = 4;
+
+  link_send_up(&f);
+}
+
+/* Sense vel_right (§08): one bounded read, pack big-endian, send up. A read
+   that fails returns → no write → the seq stalls → the reader goes stale. */
+static void vel_right_sample_tick(uint32_t now_us) {
+  WheelSpeed raw;
+  if (!wheels_vel_right_read(&raw)) return;
+
+  Frame f;
+  f.node = MY_NODE;
+  f.port = PORT_WHEELS_VEL_RIGHT;
+  f.seq = ++g_seq_vel_right;        /* advance only on a real new value */
+  f.stamped = PORT_WHEELS_VEL_RIGHT_STAMPED;
+  f.t_dev = 0;
+  (void)now_us;
+
+  be_put_f32(&f.payload[0], raw.rad_s);
+  f.payload_len = 4;
+
+  link_send_up(&f);
+}
 static Router g_router;
 
 static void deliver_local(const Frame *f, void *) {
@@ -158,8 +198,10 @@ extern "C" void hub_setup(void) {
 static Task wheels_tasks[] = {
   { 0, 0, control_tick },  /* period 0 → every loop pass */
   { 20000, 0, motor_left_cmd_tick }  /* motor_left @ 50 Hz */,
+  { 20000, 0, vel_left_sample_tick }  /* vel_left @ 50 Hz */,
   { 20000, 0, status_left_sample_tick }  /* status_left @ 50 Hz */,
   { 20000, 0, status_right_sample_tick }  /* status_right @ 50 Hz */,
+  { 20000, 0, vel_right_sample_tick }  /* vel_right @ 50 Hz */,
   { 20000, 0, motor_right_cmd_tick }  /* motor_right @ 50 Hz */
 };
 #define WHEELS_N_TASKS (sizeof(wheels_tasks) / sizeof(wheels_tasks[0]))
