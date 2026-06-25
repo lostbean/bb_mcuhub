@@ -469,6 +469,14 @@ defmodule SegbyV1.Balance do
         output_clamp: opts[:output_clamp] * 1.0
       },
       enabled: opts[:enabled],
+      # Whether the robot is ARMED. The balance loop is the wheels' sole commander,
+      # so on disarm it MUST stop publishing — the on-chip floor's safe-state is
+      # reached by command-silence (§05), and a controller that keeps commanding
+      # defeats disarm (it re-advances the floor's seq every tick). Seeded from the
+      # current safety state so a boot-disarmed robot drives nothing until armed;
+      # updated by `handle_safety_state_change/2` (disarm) and the `:armed`
+      # transition (re-arm). See ADR-0010.
+      armed: BB.Safety.state(bb.robot) == :armed,
       last_teleop: %{forward: 0.0, turn: 0.0},
       # latest measured per-wheel speed (rad/s) from the vel_* sensor streams.
       measured_left: 0.0,
@@ -485,6 +493,17 @@ defmodule SegbyV1.Balance do
     BB.subscribe(bb.robot, state.vel_right_topic, message_types: [BB.Message.Sensor.JointState])
 
     {:ok, state}
+  end
+
+  # Disarm (or error): stop commanding the wheels. The framework calls this on a
+  # transition to :disarming/:disarmed/:error (BB.Controller, the lostbean fork).
+  # We keep running (controllers are long-lived) but flip `armed: false` so
+  # `command/2` publishes nothing — the wheels go to command-silence and the floor
+  # reaches its safe state (§05 / ADR-0010). The matching re-arm is the `:armed`
+  # state-machine transition below.
+  @impl BB.Controller
+  def handle_safety_state_change(_disarm_state, state) do
+    {:continue, %{state | armed: false}}
   end
 
   # A pose tick while DISABLED: zero BALANCE torque (the chassis is not actively
@@ -582,6 +601,17 @@ defmodule SegbyV1.Balance do
     {:noreply, set_enabled(state, on?)}
   end
 
+  # Re-arm: the safety state machine transitioned to :armed. The disarm states are
+  # handled by `handle_safety_state_change/2` (which the framework dispatches and
+  # consumes); the `:armed` transition is NOT a disarm state, so the framework
+  # forwards it here. Resume commanding the wheels (see ADR-0010).
+  def handle_info(
+        {:bb, [:state_machine], %BB.Message{payload: %{to: :armed}}},
+        state
+      ) do
+    {:noreply, %{state | armed: true}}
+  end
+
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl BB.Controller
@@ -605,6 +635,12 @@ defmodule SegbyV1.Balance do
   # schema rejects (`duration` is an optional :pos_integer with no default, so the
   # key must be OMITTED, not nil). A bare struct sidesteps that and is exactly the
   # shape the view (and the §02 slice tracer) expects.
+  # DISARMED: publish nothing. The wheels' command slots stop advancing, the floor
+  # sees command-silence, and the hub reaches its safe state (§05 / ADR-0010). A
+  # controller that kept commanding through disarm would re-arm the floor every
+  # tick and defeat the disarm — so the safe-state action IS to fall silent.
+  defp command(%{armed: false}, _mixed), do: :ok
+
   defp command(state, %{left: left, right: right}) do
     BB.publish(state.bb.robot, [:actuator | state.left_path], effort_message(left))
     BB.publish(state.bb.robot, [:actuator | state.right_path], effort_message(right))

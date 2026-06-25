@@ -134,10 +134,17 @@ defmodule Mix.Tasks.Segby.Sim do
         tick_ms: @tick_ms
       )
 
-    # 2b) Enable the balance loop. The robot's own default is DISABLED (so a real
-    #     board boots passive and safe — see SegbyV1.Robot), but the WHOLE POINT of
-    #     the sim is to watch the bot balance, so the sim turns it on. Without this
-    #     the wheels get a constant 0.0 N·m and the bot just topples.
+    # 2b) ARM the robot. It boots :disarmed (the safe default), and the balance
+    #     controller publishes NOTHING while disarmed (ADR-0010), so the wheels stay
+    #     silent until armed. The sim is meant to show the bot balancing and to let
+    #     the operator arm/disarm from the dashboard, so we arm at boot — the panel
+    #     then matches the live, balancing bot. (Disarm from the dashboard makes the
+    #     wheels go silent → the bot goes limp, the real floor safe-state.)
+    BB.Safety.arm(@robot)
+
+    # 2c) Enable the balance loop. The robot's own default is DISABLED (so a real
+    #     board boots passive even when armed — see SegbyV1.Robot), but the WHOLE
+    #     POINT of the sim is to watch the bot balance, so the sim turns it on.
     SegbyV1.Balance.enable(@robot)
 
     banner(mjcf)
