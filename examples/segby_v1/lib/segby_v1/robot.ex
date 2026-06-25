@@ -52,10 +52,12 @@ defmodule SegbyV1.Robot do
         # large derivative destabilizes on the noisy 100 Hz loop with clamp
         # saturation. (Absolute drive sign is set by the sim MJCF actuator gear.)
         #
-        # Inner velocity loop (ADR-0009): teleop sets a per-wheel TARGET SPEED
-        # (rad/s) and the controller adds kv·(target − measured) to the balance
-        # torque, clamped to output_clamp. kv / max_speed / max_turn_speed were
-        # tuned HEADLESS against the real SegbyV1.Balance + MuJoCo loop:
+        # Inner velocity loop (ADR-0009) + yaw-rate turn loop (amendment): teleop
+        # `forward` sets a per-wheel TARGET SPEED (rad/s) and the controller adds
+        # kv·(target − measured); `turn` commands a TARGET YAW RATE (rad/s) and the
+        # controller drives a differential turn_torque = kyaw·(target_yaw_rate −
+        # gyro_z), both clamped to output_clamp. Tuned HEADLESS against the real
+        # SegbyV1.Balance + MuJoCo loop:
         #
         #   * kv is SMALL (0.02) on purpose — the balancer naturally spins the wheels
         #     fast to stay upright, so a large kv makes the velocity term saturate the
@@ -64,14 +66,20 @@ defmodule SegbyV1.Robot do
         #     roll (forward=0.5 → ~4.9 rad/s, forward=1.0 → ~13 rad/s, |pitch|<1°
         #     sustained — replacing the old torque-bias regime where only
         #     forward≈0.001 was usable).
-        #   * max_turn_speed is kept LOW (2.0). Turning is the soft spot: the balance
-        #     PID only senses PITCH (fore-aft), so a sustained differential (turn)
-        #     command slowly pumps yaw-coupled energy the loop can't reject and the
-        #     bot eventually topples — independent of how small the gain is. Gentle
-        #     turns (turn ≲ 0.3 sustained, or brief taps) yaw cleanly and hold;
-        #     hard SUSTAINED full turns are a known limitation (ADR-0009 follow-up:
-        #     a yaw-aware term / IMU yaw feedback would be needed to make full
-        #     sustained turning stable).
+        #   * turn is now a CLOSED yaw-rate loop on the IMU gyro (Vec3.z of
+        #     angular_velocity). max_yaw_rate (0.5 rad/s) is the commandable yaw rate
+        #     at turn=1; kyaw (0.012) is the loop gain. Because the differential torque
+        #     is regulated by the MEASURED yaw it is self-limiting — as the bot yaws
+        #     faster the (target − measured) error shrinks and the differential backs
+        #     off — so a SUSTAINED full turn (turn=1.0) holds upright, the case the
+        #     old open-loop differential of the speed targets eventually toppled.
+        #     Both gains are kept SMALL: the destabilizer is the transient turn-
+        #     differential KICK (the peak turn_torque = kyaw·max_yaw_rate at zero
+        #     measured yaw), which topples the pitch-only balancer if it exceeds
+        #     ~0.008; at 0.012·0.5 = 0.006 it sits safely under. Tuned headless
+        #     against the real loop: sustained turn=1.0 holds |pitch| ~0° over 15 s
+        #     and yaws at a steady ~0.4 rad/s (scaling linearly with turn — turn=0.5
+        #     → ~0.2 rad/s); forward-only and forward+turn both drive cleanly.
         pose_topic: [:sensor, :base_link, :chassis_imu],
         left_actuator_path: [:base_link, :left_wheel, :left_drive],
         right_actuator_path: [:base_link, :right_wheel, :right_drive],
@@ -82,7 +90,8 @@ defmodule SegbyV1.Robot do
         integral_clamp: 1.0,
         output_clamp: 1.0,
         max_speed: 10.0,
-        max_turn_speed: 2.0,
+        max_yaw_rate: 0.5,
+        kyaw: 0.012,
         kv: 0.02,
         enabled: false
       }
@@ -92,8 +101,9 @@ defmodule SegbyV1.Robot do
   commands do
     # Operator teleop from the dashboard (§09). bb_tui's Commands panel runs this
     # via the runtime; its handler publishes a Twist onto the balance controller's
-    # teleop topic, which sets a per-wheel TARGET SPEED for the inner velocity loop
-    # (ADR-0009 — NOT a torque bias). `allowed_states [:*]` so an operator can
+    # teleop topic. `forward` sets a per-wheel TARGET SPEED (inner velocity loop)
+    # and `turn` commands a TARGET YAW RATE closed-loop on the IMU yaw (ADR-0009 +
+    # amendment — NOT a torque bias). `allowed_states [:*]` so an operator can
     # teleop in any non-disarmed state.
     command :teleop do
       handler(SegbyV1.Teleop)
@@ -106,7 +116,10 @@ defmodule SegbyV1.Robot do
 
       argument :turn, :float do
         default(0.0)
-        doc("turn TARGET SPEED in [-1.0, 1.0] — differential yaw rate (scaled by max_turn_speed)")
+
+        doc(
+          "turn TARGET YAW RATE in [-1.0, 1.0] — chassis yaw rate (scaled by max_yaw_rate), closed-loop on the IMU yaw"
+        )
       end
     end
   end

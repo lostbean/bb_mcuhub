@@ -60,3 +60,5 @@ examples/*/doc/
 # generates it, so the sim's MuJoCo deps pin reproducibly (like flake.lock).
 examples/segby_v1/sim/__pycache__/
 examples/segby_v1/sim/.venv/
+# MuJoCo writes this log at the app root on every sim run.
+examples/segby_v1/MUJOCO_LOG.TXT

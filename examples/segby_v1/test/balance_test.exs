@@ -7,8 +7,9 @@ defmodule SegbyV1.BalanceTest do
     * the PURE cores — `step/3` (the PID),
       `step_pitch/4` (the accel/gyro complementary filter — the LIVE pitch source),
       `pitch_from_imu/1` (quaternion → pitch — an unused helper), and
-      `velocity_mix/4` (the inner velocity loop — teleop target speed + measured
-      speed + balance torque, ADR-0009) — exercised directly, no process.
+      `velocity_mix/5` (the inner velocity loop + the yaw-rate turn loop — teleop
+      target speed + measured speed + measured yaw + balance torque, ADR-0009 +
+      amendment) — exercised directly, no process.
     * an integration layer — the controller driven by synthetic pose messages
       through the real BB PubSub seam, asserting it publishes `Effort` to BOTH
       wheel actuator topics when enabled and zero when disabled (and never writes
@@ -191,36 +192,39 @@ defmodule SegbyV1.BalanceTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Pure inner velocity loop (ADR-0009)
+  # Pure inner velocity loop + yaw-rate turn loop (ADR-0009 + amendment)
   # ---------------------------------------------------------------------------
-  describe "velocity_mix/4 — the inner velocity loop" do
-    # max_speed 10, max_turn_speed 4, kv 0.1, output_clamp big enough not to bite.
-    @vp %{max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1, output_clamp: 100.0}
+  describe "velocity_mix/5 — the velocity loop + the closed yaw-rate turn loop" do
+    # forward loop: max_speed 10, kv 0.1; yaw loop: max_yaw_rate 4, kyaw 0.1;
+    # output_clamp big enough not to bite.
+    @vp %{max_speed: 10.0, max_yaw_rate: 4.0, kyaw: 0.1, kv: 0.1, output_clamp: 100.0}
     @zero %{left: 0.0, right: 0.0}
 
     test "zero teleop + zero measured -> just the balance torque on both wheels" do
-      mixed = Balance.velocity_mix(0.3, %{forward: 0.0, turn: 0.0}, @zero, @vp)
+      mixed = Balance.velocity_mix(0.3, %{forward: 0.0, turn: 0.0}, @zero, 0.0, @vp)
       assert_in_delta mixed.left, 0.3, 1.0e-9
       assert_in_delta mixed.right, 0.3, 1.0e-9
     end
 
-    test "zero teleop but nonzero measured -> the loop resists drift (holds zero speed)" do
+    test "zero teleop but nonzero measured speed -> the loop resists drift (holds zero speed)" do
       # measured +2 rad/s on both, target 0 -> kv·(0 - 2) = -0.2 added to balance.
-      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 0.0}, %{left: 2.0, right: 2.0}, @vp)
+      mixed =
+        Balance.velocity_mix(0.0, %{forward: 0.0, turn: 0.0}, %{left: 2.0, right: 2.0}, 0.0, @vp)
+
       assert_in_delta mixed.left, -0.2, 1.0e-9
       assert_in_delta mixed.right, -0.2, 1.0e-9
     end
 
     test "forward target adds kv·(target - measured) equally to BOTH wheels" do
       # forward 1.0 -> target 10 rad/s; measured 0 -> kv·10 = 1.0 on top of balance.
-      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 0.0}, @zero, @vp)
+      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 0.0}, @zero, 0.0, @vp)
       assert_in_delta mixed.left, 1.0, 1.0e-9
       assert_in_delta mixed.right, 1.0, 1.0e-9
     end
 
     test "the velocity term is ADDITIVE to the balance torque (sign preserved)" do
       # a corrective balance torque of -0.5 + a small forward velocity push.
-      mixed = Balance.velocity_mix(-0.5, %{forward: 0.2, turn: 0.0}, @zero, @vp)
+      mixed = Balance.velocity_mix(-0.5, %{forward: 0.2, turn: 0.0}, @zero, 0.0, @vp)
       # target 2 rad/s, measured 0 -> +0.2; -0.5 + 0.2 = -0.3 (still negative).
       assert_in_delta mixed.left, -0.3, 1.0e-9
       assert_in_delta mixed.right, -0.3, 1.0e-9
@@ -228,44 +232,86 @@ defmodule SegbyV1.BalanceTest do
 
     test "the controller adds exactly kv·(target - measured) for a given measured speed" do
       # forward 0.5 -> target 5 rad/s; measured 1.5 -> error 3.5; kv 0.1 -> +0.35.
-      mixed = Balance.velocity_mix(0.0, %{forward: 0.5, turn: 0.0}, %{left: 1.5, right: 1.5}, @vp)
+      mixed =
+        Balance.velocity_mix(0.0, %{forward: 0.5, turn: 0.0}, %{left: 1.5, right: 1.5}, 0.0, @vp)
+
       assert_in_delta mixed.left, 0.1 * (5.0 - 1.5), 1.0e-9
       assert_in_delta mixed.right, 0.1 * (5.0 - 1.5), 1.0e-9
     end
 
-    test "turn differentials the target speed (right +, left -)" do
-      # turn 1.0 -> target_left -4, target_right +4; measured 0 -> kv·∓4 = ∓0.4.
-      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, @vp)
+    test "zero turn -> no turn_torque (pure forward + balance, equal on both wheels)" do
+      # turn 0 -> target_yaw_rate 0; even with a measured yaw the differential is
+      # only kyaw·(0 - measured_yaw) — but with turn=0 we assert the no-yaw case:
+      # measured_yaw 0 -> turn_torque exactly 0, so left == right.
+      mixed = Balance.velocity_mix(0.2, %{forward: 0.5, turn: 0.0}, @zero, 0.0, @vp)
+      # forward 0.5 -> target 5, measured 0 -> +0.5; plus balance 0.2 = 0.7.
+      assert_in_delta mixed.left, 0.7, 1.0e-9
+      assert_in_delta mixed.right, 0.7, 1.0e-9
+      # no differential between wheels.
+      assert_in_delta mixed.left, mixed.right, 1.0e-12
+    end
+
+    test "turn with measured_yaw=0 -> turn_torque = kyaw·turn·max_yaw_rate (left -, right +)" do
+      # turn 1.0 -> target_yaw_rate 4 rad/s; measured_yaw 0 -> turn_torque = 0.1·4 = 0.4.
+      # left -= turn_torque, right += turn_torque (differential, balance 0, forward 0).
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, 0.0, @vp)
       assert_in_delta mixed.left, -0.4, 1.0e-9
       assert_in_delta mixed.right, 0.4, 1.0e-9
     end
 
-    test "forward + turn combine into the per-wheel target speed" do
-      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 1.0}, @zero, @vp)
-      # left target = 10 - 4 = 6 -> +0.6; right target = 10 + 4 = 14 -> +1.4.
+    test "turn with measured_yaw at the target -> turn_torque ~0 (loop satisfied, self-limiting)" do
+      # turn 1.0 -> target_yaw_rate 4; measured_yaw also 4 -> error 0 -> turn_torque 0.
+      # so the differential vanishes once the bot yaws at the commanded rate.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, 4.0, @vp)
+      assert_in_delta mixed.left, 0.0, 1.0e-9
+      assert_in_delta mixed.right, 0.0, 1.0e-9
+    end
+
+    test "the yaw loop backs off as measured_yaw approaches the target (partial tracking)" do
+      # turn 1.0 -> target_yaw_rate 4; measured_yaw 3 -> error 1 -> turn_torque 0.1·1 = 0.1.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, 3.0, @vp)
+      assert_in_delta mixed.left, -0.1, 1.0e-9
+      assert_in_delta mixed.right, 0.1, 1.0e-9
+    end
+
+    test "forward + turn combine: forward speed loop equal, turn differential on top" do
+      # forward 1.0 -> target 10, measured 0 -> +1.0 on both; turn 1.0, measured_yaw 0
+      # -> turn_torque 0.4 -> left = 1.0 - 0.4 = 0.6; right = 1.0 + 0.4 = 1.4.
+      mixed = Balance.velocity_mix(0.0, %{forward: 1.0, turn: 1.0}, @zero, 0.0, @vp)
       assert_in_delta mixed.left, 0.6, 1.0e-9
       assert_in_delta mixed.right, 1.4, 1.0e-9
     end
 
-    test "teleop intent is clamped to [-1, 1] before scaling to a target speed" do
-      mixed = Balance.velocity_mix(0.0, %{forward: 5.0, turn: -5.0}, @zero, @vp)
-      # forward clamps to 1.0 -> target 10; turn clamps to -1.0 -> ±4.
-      # left = 10 - (-4) = 14 -> +1.4; right = 10 + (-4) = 6 -> +0.6.
+    test "teleop intent is clamped to [-1, 1] before scaling to targets" do
+      # forward clamps to 1.0 -> target 10 -> +1.0 both; turn clamps to -1.0 ->
+      # target_yaw_rate -4, measured_yaw 0 -> turn_torque -0.4.
+      # left = 1.0 - (-0.4) = 1.4; right = 1.0 + (-0.4) = 0.6.
+      mixed = Balance.velocity_mix(0.0, %{forward: 5.0, turn: -5.0}, @zero, 0.0, @vp)
       assert_in_delta mixed.left, 1.4, 1.0e-9
       assert_in_delta mixed.right, 0.6, 1.0e-9
     end
 
     test "the final per-wheel torque is clamped symmetrically to output_clamp" do
-      vp = %{max_speed: 100.0, max_turn_speed: 0.0, kv: 1.0, output_clamp: 1.0}
+      vp = %{max_speed: 100.0, max_yaw_rate: 0.0, kyaw: 0.0, kv: 1.0, output_clamp: 1.0}
       # target 100, measured 0 -> +100, plus balance 0.5 -> clamped to +1.0.
-      mixed = Balance.velocity_mix(0.5, %{forward: 1.0, turn: 0.0}, @zero, vp)
+      mixed = Balance.velocity_mix(0.5, %{forward: 1.0, turn: 0.0}, @zero, 0.0, vp)
       assert mixed.left == 1.0
       assert mixed.right == 1.0
 
       # negative side clamps too.
-      mixed2 = Balance.velocity_mix(-0.5, %{forward: -1.0, turn: 0.0}, @zero, vp)
+      mixed2 = Balance.velocity_mix(-0.5, %{forward: -1.0, turn: 0.0}, @zero, 0.0, vp)
       assert mixed2.left == -1.0
       assert mixed2.right == -1.0
+    end
+
+    test "the turn differential is also subject to the output clamp" do
+      # a big turn command with zero measured yaw -> a large turn_torque, clamped.
+      vp = %{max_speed: 0.0, max_yaw_rate: 100.0, kyaw: 1.0, kv: 0.0, output_clamp: 1.0}
+      # target_yaw_rate 100, measured 0 -> turn_torque 100; left -100 -> clamp -1.0,
+      # right +100 -> clamp +1.0.
+      mixed = Balance.velocity_mix(0.0, %{forward: 0.0, turn: 1.0}, @zero, 0.0, vp)
+      assert mixed.left == -1.0
+      assert mixed.right == 1.0
     end
   end
 
@@ -348,7 +394,8 @@ defmodule SegbyV1.BalanceTest do
     test "teleop forward intent drives the velocity loop on top of balance" do
       # max_speed 10, kv 0.1 -> forward 1.0 = target 10 rad/s; measured 0 (no vel
       # stream injected) -> kv·(10 - 0) = +1.0 on top of the (~0) balance torque.
-      ctrl = start_controller(enabled: true, max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1)
+      ctrl =
+        start_controller(enabled: true, max_speed: 10.0, max_yaw_rate: 4.0, kyaw: 0.1, kv: 0.1)
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -366,7 +413,8 @@ defmodule SegbyV1.BalanceTest do
     end
 
     test "a measured wheel speed bleeds the velocity error (kv·(target - measured))" do
-      ctrl = start_controller(enabled: true, max_speed: 10.0, max_turn_speed: 4.0, kv: 0.1)
+      ctrl =
+        start_controller(enabled: true, max_speed: 10.0, max_yaw_rate: 4.0, kyaw: 0.1, kv: 0.1)
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -429,7 +477,8 @@ defmodule SegbyV1.BalanceTest do
         integral_clamp: 1.0,
         output_clamp: 1.0,
         max_speed: 10.0,
-        max_turn_speed: 2.0,
+        max_yaw_rate: 0.5,
+        kyaw: 0.012,
         kv: 0.02,
         enabled: false
       ]

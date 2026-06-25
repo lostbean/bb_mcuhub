@@ -14,13 +14,15 @@ defmodule SegbyV1.Teleop do
   (each clamped to `[-1.0, 1.0]` by the controller), this handler publishes a
   `BB.Message.Geometry.Twist` (`linear.x` = forward, `angular.z` = turn, the
   ROS-style convention) onto the balance controller's teleop topic
-  (`[:teleop, :segby]`). The balance controller consumes that Twist as a per-wheel
-  **target SPEED** for its inner velocity loop (ADR-0009): `forward` = roll forward
-  at a bounded rate (scaled by `max_speed`), `turn` = a differential yaw rate
-  (scaled by `max_turn_speed`) — NOT a torque bias. The controller then drives
-  `kv·(target − measured)` onto the balance torque each pose tick. The command
-  completes immediately — it is a single fire-and-forget intent update, not a
-  long-running motion.
+  (`[:teleop, :segby]`). The balance controller consumes that Twist
+  (ADR-0009 + amendment): `forward` is a per-wheel **target SPEED** for its inner
+  velocity loop (roll forward at a bounded rate, scaled by `max_speed`), and `turn`
+  is a **target YAW RATE** (chassis yaw rate, scaled by `max_yaw_rate`) closed-loop
+  on the IMU's measured yaw — NOT a torque bias. The controller drives the forward
+  velocity term `kv·(target − measured)` and the differential yaw term
+  `±kyaw·(target_yaw_rate − gyro_z)` onto the balance torque each pose tick. The
+  command completes immediately — it is a single fire-and-forget intent update, not
+  a long-running motion.
 
   Wired into segby's `commands do` block with `allowed_states [:*]` so an
   operator can teleop in any non-disarmed operational state.

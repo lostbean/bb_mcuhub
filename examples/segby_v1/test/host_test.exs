@@ -147,7 +147,8 @@ defmodule SegbyV1.HostTest do
           integral_clamp: 1.0,
           output_clamp: 1.0,
           max_speed: 10.0,
-          max_turn_speed: 2.0,
+          max_yaw_rate: 0.5,
+          kyaw: 0.012,
           kv: 0.02,
           enabled: true
         )

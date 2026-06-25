@@ -18,28 +18,45 @@ defmodule SegbyV1.Balance do
 
       pose (BB.Message.Sensor.Imu) → step_pitch/4 (complementary filter)
         → PID step/3 → balance_torque
-        → velocity_mix/5 (target speed from teleop + kv·(target − measured) per wheel)
+        → velocity_mix/5 (forward SPEED loop: kv·(target − measured) per wheel;
+            turn YAW-RATE loop: ±kyaw·(target_yaw_rate − gyro_z) differential)
         → {left, right} clamped to output_clamp → set_effort to both wheels
 
-  ## The inner velocity loop (ADR-0009)
+  ## The inner velocity loop + the yaw-rate turn loop (ADR-0009 + amendment)
 
   Teleop on a balancing bot CANNOT be a torque bias: torque is acceleration, so a
   forward torque bias accelerates the wheels forever — they run away and the bot
-  falls. Instead teleop sets a per-wheel **target speed** (rad/s) and the
-  controller closes a velocity loop on top of the balance torque:
+  falls. Instead `forward` sets a per-wheel **target speed** (rad/s) and `turn`
+  commands a **target yaw rate** (rad/s), and the controller closes a loop on each
+  on top of the balance torque:
 
-      target_left  = forward · max_speed − turn · max_turn_speed
-      target_right = forward · max_speed + turn · max_turn_speed
-      left  = clamp(balance_torque + kv · (target_left  − measured_left),  ±output_clamp)
-      right = clamp(balance_torque + kv · (target_right − measured_right), ±output_clamp)
+      fwd_target      = forward · max_speed                       # forward SPEED loop
+      target_yaw_rate = turn · max_yaw_rate                       # turn YAW-RATE loop
+      turn_torque     = kyaw · (target_yaw_rate − gyro_z)         # closed on measured yaw
+      left  = clamp(balance_torque + kv · (fwd_target − measured_left)  − turn_torque, ±output_clamp)
+      right = clamp(balance_torque + kv · (fwd_target − measured_right) + turn_torque, ±output_clamp)
 
   So `forward = 0.5` means "roll forward at half of `max_speed` rad/s", a bounded
-  rate the loop holds by bleeding off the speed error — not a runaway. With zero
-  teleop the target is 0 and the loop actively holds the wheels at zero speed
-  (resisting drift). The measured speeds come from the wheels hub's `vel_left` /
-  `vel_right` sensor ports (`SegbyV1.ValueTypes.WheelSpeed` → `JointState`),
-  subscribed below exactly as the IMU pose is. The velocity term is ADDITIVE to
-  the balance torque — it never changes the balance sign.
+  rate the loop holds by bleeding off the speed error — not a runaway. The measured
+  speeds come from the wheels hub's `vel_left` / `vel_right` sensor ports
+  (`SegbyV1.ValueTypes.WheelSpeed` → `JointState`), subscribed below exactly as the
+  IMU pose is.
+
+  `turn` is **closed-loop on the measured chassis yaw rate** (the amendment): it
+  was an open-loop differential of the wheel-speed targets, which has no feedback
+  regulating the actual yaw — so a sustained hard turn pumped yaw-coupled energy
+  the pitch-only balance PID cannot reject, and the bot eventually toppled (gain
+  independent — lowering the turn authority only delayed it). Now `turn` commands a
+  yaw RATE and `turn_torque = kyaw · (target_yaw_rate − gyro_z)` drives the
+  differential torque so the **measured** yaw (the IMU gyro's body-Z,
+  `Vec3.z(angular_velocity)`, already on the pose tick) tracks it. Because the
+  differential is regulated by the measured yaw it cannot run away — as the bot
+  yaws faster the error shrinks and the differential backs off — so any commanded
+  turn rate is self-limiting and a sustained hard turn (turn=1.0) stays stable.
+
+  With zero teleop both targets are 0 and the loop actively holds the wheels at
+  zero speed and zero yaw (resisting drift). Both terms are ADDITIVE to the balance
+  torque — neither changes the balance sign.
 
   ## Pitch extraction (accel/gyro complementary filter)
 
@@ -65,13 +82,18 @@ defmodule SegbyV1.Balance do
   ## Gains (segby_v1 config)
 
   `kp 0.5, ki 0.05, kd 0.1, target_pitch 0.0, integral_clamp 1.0, output_clamp
-  1.0`. Velocity loop: `max_speed`/`max_turn_speed` (rad/s) bound the teleop
-  target speed, `kv` is the velocity-loop gain. The segby_v1 robot passes the
-  values tuned headless against the real MuJoCo loop (ADR-0009): `max_speed 10.0,
-  max_turn_speed 2.0, kv 0.02` — `kv` deliberately small so the velocity term
-  never saturates the clamp and starves the balance torque, and `max_turn_speed`
-  low because a sustained hard turn destabilizes the pitch-only balance loop
-  (forward driving is fully usable; see `SegbyV1.Robot`).
+  1.0`. Forward speed loop: `max_speed` (rad/s) bounds the teleop target speed, `kv`
+  is the velocity-loop gain. Turn yaw-rate loop: `max_yaw_rate` (rad/s) is the
+  commandable yaw rate at `turn = 1`, `kyaw` the yaw-loop gain (torque per rad/s of
+  yaw error). The segby_v1 robot passes the values tuned headless against the real
+  MuJoCo loop (ADR-0009 + amendment): `max_speed 10.0, kv 0.02, max_yaw_rate 0.5,
+  kyaw 0.012` — `kv` deliberately small so the velocity term never saturates the
+  clamp and starves the balance torque; `kyaw` deliberately small (the transient
+  turn-differential kick is what topples the pitch-only balancer, so the loop gain —
+  really the product `kyaw·max_yaw_rate`, the peak turn_torque at zero measured yaw —
+  must stay low, ≲0.008). With these, a SUSTAINED full turn (turn=1.0) stays upright
+  (|pitch| ~0° over 15 s headless) and yaws at a steady ~0.4 rad/s, scaling linearly
+  with `turn`; the old open-loop differential toppled here (see `SegbyV1.Robot`).
 
   ## Enable / disable
 
@@ -90,12 +112,14 @@ defmodule SegbyV1.Balance do
   ## Teleop (operator input via bb_tui) — a bounded SPEED, not a torque
 
   Teleop intent (`forward`, `turn`, both in `[-1.0, 1.0]`) arrives on a PubSub
-  topic (`:teleop_topic`, default `[:teleop, :segby]`). `forward`/`turn` set a
-  per-wheel **target speed** (rad/s, scaled by `max_speed` / `max_turn_speed`) —
-  "forward = roll forward at a bounded rate", NOT a torque bias. The controller's
-  inner velocity loop adds `kv · (target − measured)` to the balance torque every
-  pose tick (`velocity_mix/5`); with zero teleop the target is 0 and the loop holds
-  the wheels at zero speed.
+  topic (`:teleop_topic`, default `[:teleop, :segby]`). `forward` sets a per-wheel
+  **target speed** (rad/s, scaled by `max_speed`) — "roll forward at a bounded
+  rate", NOT a torque bias — and `turn` commands a **target yaw rate** (rad/s,
+  scaled by `max_yaw_rate`), closed-loop on the IMU's measured yaw. The
+  controller's `velocity_mix/5` adds the forward velocity term `kv · (target −
+  measured)` and the yaw differential term `±kyaw · (target_yaw_rate − gyro_z)` to
+  the balance torque every pose tick; with zero teleop both targets are 0 and the
+  loop holds the wheels at zero speed and zero yaw.
 
   `bb_tui` has no built-in "teleop" concept — its operator surface is the
   declared-`commands` panel (executed via `BB.Robot.Runtime.execute/3`), the
@@ -120,8 +144,9 @@ defmodule SegbyV1.Balance do
     * `step_pitch/4` — accel/gyro complementary filter → pitch (radians).
     * `pitch_from_accel/3` — accel-only absolute pitch (the filter's anchor term).
     * `pitch_from_imu/1` — quaternion → pitch (radians); unused helper.
-    * `velocity_mix/5` — the inner velocity loop: teleop target speed + measured
-      speed + the balance torque → clamped per-wheel `{left, right}` torque.
+    * `velocity_mix/5` — the inner velocity loop + the yaw-rate turn loop: teleop
+      target speed + measured speed + measured yaw rate + the balance torque →
+      clamped per-wheel `{left, right}` torque.
   """
 
   use BB.Controller,
@@ -167,10 +192,15 @@ defmodule SegbyV1.Balance do
         default: 10.0,
         doc: "teleop forward TARGET speed (rad/s) at |forward|=1 (inner velocity loop)"
       ],
-      max_turn_speed: [
+      max_yaw_rate: [
         type: :float,
-        default: 2.0,
-        doc: "teleop turn differential TARGET speed (rad/s) at |turn|=1"
+        default: 0.5,
+        doc: "commandable yaw rate (rad/s) at turn=1 (closed yaw-rate loop)"
+      ],
+      kyaw: [
+        type: :float,
+        default: 0.012,
+        doc: "yaw-rate loop gain, torque per rad/s of yaw error"
       ],
       kv: [type: :float, default: 0.02, doc: "inner velocity-loop gain (torque per rad/s error)"],
       enabled: [type: :boolean, default: false, doc: "start enabled? (default DISABLED)"]
@@ -302,38 +332,66 @@ defmodule SegbyV1.Balance do
   end
 
   @doc """
-  Pure inner velocity loop (ADR-0009). Given the `balance_torque` (the PID's
-  upright-holding torque, applied to both wheels), the teleop intent
-  `%{forward, turn}` (both clamped to `[-1, 1]`), the latest measured per-wheel
-  speeds `%{left, right}` (rad/s), and the loop params `%{max_speed,
-  max_turn_speed, kv, output_clamp}`, return the clamped per-wheel torque
-  `%{left, right}`:
+  Pure inner velocity loop + closed yaw-rate turn loop (ADR-0009 + amendment).
+  Given the `balance_torque` (the PID's upright-holding torque, applied to both
+  wheels), the teleop intent `%{forward, turn}` (both clamped to `[-1, 1]`), the
+  latest measured per-wheel speeds `%{left, right}` (rad/s), the measured chassis
+  yaw rate `measured_yaw` (rad/s, the IMU gyro's body-Z = `Vec3.z(angular_velocity)`),
+  and the loop params `%{max_speed, max_yaw_rate, kyaw, kv, output_clamp}`, return
+  the clamped per-wheel torque `%{left, right}`:
 
-      target_left  = forward · max_speed − turn · max_turn_speed
-      target_right = forward · max_speed + turn · max_turn_speed
-      left  = clamp(balance_torque + kv · (target_left  − measured_left),  ±output_clamp)
-      right = clamp(balance_torque + kv · (target_right − measured_right), ±output_clamp)
+      fwd_target      = forward · max_speed                       # forward SPEED loop
+      target_yaw_rate = turn · max_yaw_rate                       # turn commands a YAW RATE
+      turn_torque     = kyaw · (target_yaw_rate − measured_yaw)   # closed on measured yaw
+      left  = clamp(balance_torque + kv · (fwd_target − measured_left)  − turn_torque, ±output_clamp)
+      right = clamp(balance_torque + kv · (fwd_target − measured_right) + turn_torque, ±output_clamp)
 
-  The velocity term is ADDITIVE to the balance torque (it never changes the
-  balance sign). With zero teleop the target is 0, so the loop holds the wheels at
-  zero speed. The final per-wheel torque is clamped symmetrically to
-  `output_clamp` so the velocity term cannot blow past the actuator authority.
+  Two host control laws ride on top of the balance torque, both ADDITIVE (neither
+  changes the balance sign):
+
+    * **Forward** is a closed wheel-SPEED loop (unchanged from the original
+      ADR-0009): `forward` sets a per-wheel target speed and `kv·(target − measured)`
+      bleeds the speed error, so "forward 0.3" rolls at a bounded rate, not a
+      runaway.
+    * **Turn** is a closed YAW-RATE loop (the amendment): `turn` commands a target
+      yaw rate and `turn_torque = kyaw·(target_yaw_rate − measured_yaw)` drives a
+      DIFFERENTIAL torque (−turn_torque left, +turn_torque right) so the measured
+      yaw tracks the command. Because the differential is regulated by the measured
+      yaw, it CANNOT run away: as the bot yaws faster the error shrinks and the
+      differential backs off — so even a sustained hard turn (turn=1.0) is
+      self-limiting and stays stable, where the old open-loop differential of the
+      speed targets eventually toppled the pitch-only balancer.
+
+  With zero teleop both targets are 0, so the loop holds the wheels at zero speed
+  and zero yaw. The final per-wheel torque is clamped symmetrically to
+  `output_clamp` so neither term can blow past the actuator authority.
   """
-  @spec velocity_mix(float(), map(), map(), map()) :: map()
+  @spec velocity_mix(float(), map(), map(), float(), map()) :: map()
   def velocity_mix(
         balance_torque,
         %{forward: fwd, turn: turn},
         %{left: measured_left, right: measured_right},
-        %{max_speed: max_speed, max_turn_speed: max_turn_speed, kv: kv, output_clamp: out_clamp}
+        measured_yaw,
+        %{
+          max_speed: max_speed,
+          max_yaw_rate: max_yaw_rate,
+          kyaw: kyaw,
+          kv: kv,
+          output_clamp: out_clamp
+        }
       ) do
     fwd = clamp(fwd * 1.0, -1.0, 1.0)
     turn = clamp(turn * 1.0, -1.0, 1.0)
 
-    target_left = fwd * max_speed - turn * max_turn_speed
-    target_right = fwd * max_speed + turn * max_turn_speed
+    fwd_target = fwd * max_speed
 
-    left = balance_torque + kv * (target_left - measured_left)
-    right = balance_torque + kv * (target_right - measured_right)
+    # Closed yaw-rate loop: turn sets a target yaw rate, the differential torque is
+    # regulated by the MEASURED yaw so a sustained turn is self-limiting.
+    target_yaw_rate = turn * max_yaw_rate
+    turn_torque = kyaw * (target_yaw_rate - measured_yaw * 1.0)
+
+    left = balance_torque + kv * (fwd_target - measured_left) - turn_torque
+    right = balance_torque + kv * (fwd_target - measured_right) + turn_torque
 
     %{
       left: clamp(left * 1.0, -out_clamp, out_clamp),
@@ -345,7 +403,7 @@ defmodule SegbyV1.Balance do
   defp clamp(v, _lo, hi) when v > hi, do: hi
   defp clamp(v, _lo, _hi), do: v
 
-  # The latest measured per-wheel speeds, shaped for velocity_mix/4.
+  # The latest measured per-wheel speeds, shaped for velocity_mix/5.
   defp measured(%{measured_left: l, measured_right: r}), do: %{left: l, right: r}
 
   # Seconds since the last pose tick (from monotonic nanoseconds). The first
@@ -401,10 +459,12 @@ defmodule SegbyV1.Balance do
       right_path: opts[:right_actuator_path],
       pid: pid,
       target_pitch: opts[:target_pitch] * 1.0,
-      # inner velocity-loop params (ADR-0009), pre-bundled for velocity_mix/4.
+      # inner velocity-loop + yaw-rate-loop params (ADR-0009 + amendment),
+      # pre-bundled for velocity_mix/5.
       vel_params: %{
         max_speed: opts[:max_speed] * 1.0,
-        max_turn_speed: opts[:max_turn_speed] * 1.0,
+        max_yaw_rate: opts[:max_yaw_rate] * 1.0,
+        kyaw: opts[:kyaw] * 1.0,
         kv: opts[:kv] * 1.0,
         output_clamp: opts[:output_clamp] * 1.0
       },
@@ -439,7 +499,13 @@ defmodule SegbyV1.Balance do
         %{pose_topic: topic, enabled: false} = state
       ) do
     pitch = step_pitch(state.pitch, imu, dt_since(state, msg))
-    command(state, velocity_mix(0.0, state.last_teleop, measured(state), state.vel_params))
+    measured_yaw = Vec3.z(imu.angular_velocity)
+
+    command(
+      state,
+      velocity_mix(0.0, state.last_teleop, measured(state), measured_yaw, state.vel_params)
+    )
+
     {:noreply, %{state | last_mono: msg.monotonic_time, pitch: pitch}}
   end
 
@@ -453,10 +519,14 @@ defmodule SegbyV1.Balance do
     dt_s = dt_since(state, msg)
 
     pitch = step_pitch(state.pitch, imu, dt_s)
+    measured_yaw = Vec3.z(imu.angular_velocity)
     error = state.target_pitch - pitch
     {torque, new_pid} = step(state.pid, error, dt_s)
 
-    command(state, velocity_mix(torque, state.last_teleop, measured(state), state.vel_params))
+    command(
+      state,
+      velocity_mix(torque, state.last_teleop, measured(state), measured_yaw, state.vel_params)
+    )
 
     {:noreply, %{state | pid: new_pid, last_mono: msg.monotonic_time, pitch: pitch}}
   end
