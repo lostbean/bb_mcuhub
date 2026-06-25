@@ -58,6 +58,15 @@ defmodule SegbyV1.HostTest do
     # real COBS+CRC seam runs without hardware.
     sup = start_supervised!({Host, transport: LoopbackTransport, name: nil})
 
+    # The robot boots :disarmed (BB's safe default) and the balance controller —
+    # the wheels' sole commander — publishes NOTHING while disarmed (the on-chip
+    # floor reaches safe-state via command-silence; a controller that kept
+    # commanding would defeat disarm, see ADR-0010). Every assertion below that a
+    # command reaches the wire therefore requires the robot ARMED first. Arming
+    # here flips safety state and publishes the `:armed` transition on
+    # `[:state_machine]`, which the running controller consumes to re-arm itself.
+    :ok = BB.Safety.arm(@robot)
+
     transport = :sys.get_state(LinkOwner).transport
     on_exit(fn -> if Process.alive?(sup), do: Supervisor.stop(sup) end)
 

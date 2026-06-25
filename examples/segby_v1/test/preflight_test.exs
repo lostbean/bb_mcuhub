@@ -61,6 +61,16 @@ defmodule SegbyV1.PreflightTest do
       :ok
     else
       sup = start_supervised!({Host, transport: LoopbackTransport, name: nil})
+
+      # The robot boots :disarmed; the balance controller (the wheels' sole
+      # commander) stays silent while disarmed, so the on-chip floor reaches its
+      # safe state via command-silence (§05 / ADR-0010). Every preflight assertion
+      # that a command reaches the wire therefore requires the robot ARMED first;
+      # arming publishes the `:armed` transition the controller consumes to resume
+      # commanding. (The born-stale test still sees no effort — the view never
+      # publishes a pose, so the controller never ticks, armed or not.)
+      :ok = BB.Safety.arm(@robot)
+
       transport = :sys.get_state(LinkOwner).transport
       on_exit(fn -> if Process.alive?(sup), do: Supervisor.stop(sup) end)
       {:ok, transport: transport}

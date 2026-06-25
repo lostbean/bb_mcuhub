@@ -342,7 +342,7 @@ defmodule SegbyV1.BalanceTest do
     end
 
     test "ENABLED: a forward tilt drives non-zero Effort to BOTH wheels" do
-      ctrl = start_controller(enabled: true)
+      ctrl = start_controller(enabled: true) |> arm()
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -362,7 +362,11 @@ defmodule SegbyV1.BalanceTest do
     end
 
     test "DISABLED: any tilt commands ZERO Effort to BOTH wheels" do
-      ctrl = start_controller(enabled: false)
+      # ARMED but balance-DISABLED: the controller still PUBLISHES (a zero balance
+      # torque, the velocity loop having no teleop) — disabled is not disarmed. The
+      # gate only silences a DISARMED controller; an armed+disabled one publishes
+      # zero. (Disarm-silences is the regression test below.)
+      ctrl = start_controller(enabled: false) |> arm()
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -376,7 +380,7 @@ defmodule SegbyV1.BalanceTest do
     end
 
     test "toggling enable on (live) makes a tilt produce corrective Effort again" do
-      ctrl = start_controller(enabled: false)
+      ctrl = start_controller(enabled: false) |> arm()
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -396,6 +400,7 @@ defmodule SegbyV1.BalanceTest do
       # stream injected) -> kv·(10 - 0) = +1.0 on top of the (~0) balance torque.
       ctrl =
         start_controller(enabled: true, max_speed: 10.0, max_yaw_rate: 4.0, kyaw: 0.1, kv: 0.1)
+        |> arm()
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -415,6 +420,7 @@ defmodule SegbyV1.BalanceTest do
     test "a measured wheel speed bleeds the velocity error (kv·(target - measured))" do
       ctrl =
         start_controller(enabled: true, max_speed: 10.0, max_yaw_rate: 4.0, kyaw: 0.1, kv: 0.1)
+        |> arm()
 
       BB.subscribe(@robot, [:actuator | @left])
       BB.subscribe(@robot, [:actuator | @right])
@@ -433,6 +439,57 @@ defmodule SegbyV1.BalanceTest do
       # kv 0.1 · (10 - 4) = 0.6 on top of the ~0 balance torque.
       assert_in_delta left, 0.6, 1.0e-6
       assert_in_delta right, 0.6, 1.0e-6
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Disarm gate — the regression test (ADR-0010)
+  # ---------------------------------------------------------------------------
+  describe "disarm STOPS a running balance loop (the safety gate)" do
+    # @robot / @pose_topic / @left / @right reuse the integration block's attrs.
+    setup do
+      start_supervised!(
+        {Registry, keys: :duplicate, name: BB.PubSub.registry_name(@robot)},
+        id: :pubsub_registry
+      )
+
+      :ok
+    end
+
+    test "a live, ENABLED balance loop commands while armed, then FALLS SILENT on disarm" do
+      # The wheels' sole commander, running and enabled — it IS commanding.
+      ctrl = start_controller(enabled: true) |> arm()
+
+      BB.subscribe(@robot, [:actuator | @left])
+      BB.subscribe(@robot, [:actuator | @right])
+
+      # 1) ARMED + enabled: a tilt drives corrective Effort to BOTH wheels.
+      send(ctrl, pose_msg(0.1, 0))
+      send(ctrl, pose_msg(0.1, 10_000_000))
+      assert drain_last_effort([:actuator | @left]) < 0.0
+      assert drain_last_effort([:actuator | @right]) < 0.0
+
+      # 2) DISARM the still-running, still-enabled controller. On the old (buggy)
+      # code the loop kept publishing every pose tick — that is the bug this test
+      # pins: a controller that keeps commanding through disarm re-advances the
+      # floor's seq each tick and defeats the on-chip safe-state (§05 / ADR-0010).
+      disarm(ctrl)
+
+      # 3) Drive another tilt and assert NO Effort reaches either wheel — the gate
+      # silences the disarmed controller. Drain the topic and prove nothing arrives.
+      send(ctrl, pose_msg(0.1, 20_000_000))
+      send(ctrl, pose_msg(0.1, 30_000_000))
+      flush(ctrl)
+
+      refute_effort([:actuator | @left])
+      refute_effort([:actuator | @right])
+
+      # 4) RE-ARM (live `:armed` transition): commanding resumes.
+      arm(ctrl)
+      send(ctrl, pose_msg(0.1, 40_000_000))
+      send(ctrl, pose_msg(0.1, 50_000_000))
+      assert drain_last_effort([:actuator | @left]) < 0.0
+      assert drain_last_effort([:actuator | @right]) < 0.0
     end
   end
 
@@ -486,6 +543,52 @@ defmodule SegbyV1.BalanceTest do
 
     {:ok, pid} = SegbyV1.Test.ViewHarness.start(Balance, opts)
     pid
+  end
+
+  # ARM a harness-driven controller. The robot boots :disarmed (BB's safe
+  # default) and the gate in `command/2` publishes NOTHING while disarmed (the
+  # wheels reach safe-state via command-silence; a controller that kept commanding
+  # would defeat disarm — see ADR-0010). The controller re-arms on the `:armed`
+  # state-machine transition. Here the controller is driven directly through the
+  # ViewHarness (not the real BB.Controller.Server) on a bare PubSub registry — the
+  # robot is NOT registered with BB.Safety, so `BB.Safety.arm/1` cannot flip its
+  # state. Instead we hand the controller the same `:armed` transition message the
+  # framework would forward to its `handle_info` on a live re-arm; the harness
+  # delivers messages in order, so sending this BEFORE the pose ticks guarantees
+  # the controller is armed when it first commands.
+  defp arm(ctrl) do
+    msg = %BB.Message{
+      monotonic_time: 0,
+      wall_time: 0,
+      node: Node.self(),
+      frame_id: :state_machine,
+      payload: %BB.StateMachine.Transition{from: :disarmed, to: :armed},
+      robot: @robot
+    }
+
+    send(ctrl, {:bb, [:state_machine], msg})
+    flush(ctrl)
+    ctrl
+  end
+
+  # DISARM a harness-driven controller. The real `BB.Controller.Server` intercepts
+  # a transition to a disarm state and routes it to `handle_safety_state_change/2`
+  # (NOT `handle_info/2`); the ViewHarness mirrors that, so this `:disarmed`
+  # transition reaches `Balance.handle_safety_state_change/2` → `armed: false`,
+  # exactly as on a live disarm. From here `command/2` publishes nothing.
+  defp disarm(ctrl, from \\ :armed) do
+    msg = %BB.Message{
+      monotonic_time: 0,
+      wall_time: 0,
+      node: Node.self(),
+      frame_id: :state_machine,
+      payload: %BB.StateMachine.Transition{from: from, to: :disarmed},
+      robot: @robot
+    }
+
+    send(ctrl, {:bb, [:state_machine], msg})
+    flush(ctrl)
+    ctrl
   end
 
   # A pose message as the chassis_imu sensor view would publish it. The segby MCU
@@ -547,6 +650,17 @@ defmodule SegbyV1.BalanceTest do
         drain_more(topic, e)
     after
       30 -> last
+    end
+  end
+
+  # Assert NO Effort is published on `topic` (the disarm gate is silent). Flunks
+  # if any Effort message arrives within the window.
+  defp refute_effort(topic) do
+    receive do
+      {:bb, ^topic, %BB.Message{payload: %BB.Message.Actuator.Command.Effort{effort: e}}} ->
+        flunk("expected NO Effort on #{inspect(topic)} after disarm, got #{inspect(e)}")
+    after
+      100 -> :ok
     end
   end
 
