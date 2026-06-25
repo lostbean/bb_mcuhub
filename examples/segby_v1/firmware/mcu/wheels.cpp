@@ -111,6 +111,12 @@ static bool m1_cs_ready = false;
  * (changing the wire would be a contract change — out of scope). */
 static float m0_ia_a = 0.0f, m0_ib_a = 0.0f;
 static float m1_ia_a = 0.0f, m1_ib_a = 0.0f;
+/* Latest closed-loop shaft velocity (rad/s) — the vel_left/vel_right SENSE
+ * ports' telemetry (ADR-0009). Captured in wheels_post_control() AFTER both FOC
+ * loops run, from SimpleFOC's BLDCMotor::shaft_velocity (the loop's velocity
+ * estimate, updated by loopFOC()/move()). A non-ready motor holds at 0.0. */
+static float m0_shaft_vel_rad_s = 0.0f;
+static float m1_shaft_vel_rad_s = 0.0f;
 
 /* AS5600 presence probe: a single, bounded I²C address-poll. GATES initFOC() —
  * calling initFOC on an absent encoder spins SimpleFOC's sensor-align on a
@@ -210,6 +216,20 @@ extern "C" void wheels_motor_right_drive(float effort) {
   m1_motor.move();
 }
 
+/* --- device: vel_left/vel_right SENSE reads (ADR-0009). Return the closed-loop
+ * shaft velocity snapshotted in wheels_post_control() each tick. These are
+ * non-blocking — a value is ALWAYS available (0.0 if the motor never aligned),
+ * so they never time out and always return true. M0 = left, M1 = right. --- */
+extern "C" bool wheels_vel_left_read(WheelSpeed *out) {
+  out->rad_s = m0_shaft_vel_rad_s;
+  return true;
+}
+
+extern "C" bool wheels_vel_right_read(WheelSpeed *out) {
+  out->rad_s = m1_shaft_vel_rad_s;
+  return true;
+}
+
 /* --- device: sample the low-side current sense for telemetry ONLY (the
  * current-sense read). One raw ADC read per linked phase, smoothed by
  * a one-pole LPF into a stable amps value. A motor with no linked sense
@@ -232,6 +252,13 @@ extern "C" void wheels_post_control(void) {
     m1_ia_a = m1_ia_lpf(c.a);
     m1_ib_a = m1_ib_lpf(c.b);
   }
+  /* vel_left/vel_right telemetry (ADR-0009): snapshot SimpleFOC's closed-loop
+   * velocity estimate AFTER both FOC loops ran this tick. Only for a ready
+   * motor — a skipped motor's value stays 0.0. */
+  if (m0_ready)
+    m0_shaft_vel_rad_s = m0_motor.shaft_velocity;
+  if (m1_ready)
+    m1_shaft_vel_rad_s = m1_motor.shaft_velocity;
 }
 
 #endif /* ARDUINO */
