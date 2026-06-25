@@ -33,7 +33,8 @@ What makes it trustworthy, in two sentences:
   cannot silently disagree.
 
 It powers a real two-wheel self-balancing bot (`segby_v1`) on real ESP32 boards
-today, and **you can run the entire host stack with zero hardware.**
+today, and **you can run the entire host stack with zero hardware — or drive the
+bot in a MuJoCo physics simulation with a 3-D viewer, no chassis required.**
 
 > **Jargon, glossed once.** A **floor** is the dead-man safety code on an
 > actuator's own chip: if commands stop arriving, it drives the actuator to its
@@ -90,6 +91,42 @@ behind the host stack on explicit simulated time (`tick(vhub, now_ms)` is the
 only clock — no wall-clock sleeps). See
 [`test/host/soft_fault_e2e_test.exs`](test/host/soft_fault_e2e_test.exs) for a
 worked fault-injection example.
+
+---
+
+## Drive it in a physics simulation (no hardware, no chassis)
+
+The Loopback transport above runs the host stack but nothing _moves_. Go one step
+further and run the **whole control loop against a real physics engine**: the same
+host stack — codec, freshness, the floor's safe-state, the balance loop, teleop —
+drives a [MuJoCo](https://mujoco.org/) model of the bot, and a native 3-D viewer
+renders it while you fly it from the terminal dashboard. The bot **balances,
+drives, and turns** — and disarming it visibly drops it limp.
+
+```sh
+cd examples/segby_v1/sim && uv sync      # one-time: pulls MuJoCo into a local .venv
+cd examples/segby_v1 && mix segby.sim     # opens the 3-D viewer + the bb_tui dashboard
+# in the dashboard: arm (a), run the :teleop command with forward/turn to drive;
+# disarm (d) drops the wheels limp — the real floor safe-state.
+```
+
+The trick is the same **transport seam** the Loopback uses — _it is the one
+hardware boundary._ A `BBMCUHub.Sim` transport (a generic, engine-agnostic library
+seam: a `Plant` behaviour + a transport + a ~100 Hz driver) replaces the wire, and
+a consumer-supplied `Plant` supplies the dynamics — here a MuJoCo plant over a
+`Port` to a small Python child. Everything above the transport is the real,
+shipped code, so the controller you tune in the sim is the one that runs on the
+board. The MuJoCo/Python dependency is **example-only** (opt-in via `uv`); the
+library and firmware ship no Python.
+
+This is what closes the **sim-to-real gap**: the balance gains, the teleop
+mixing, the wheel-velocity loop, and the disarm safe-state are all developed and
+de-risked here — against faithful dynamics, crashing for free — before a board is
+ever powered. See [ADR-0008](docs/adr/0008-virtual-robot-sim-in-the-loop.md) (the
+sim seam), [ADR-0009](docs/adr/0009-wheel-velocity-sensor-and-host-velocity-loop.md)
+(drive-by-speed), and [ADR-0010](docs/adr/0010-a-control-loop-falls-silent-on-disarm.md)
+(disarm = host silence), or [`examples/segby_v1/sim/`](examples/segby_v1/sim/) for
+the full setup.
 
 ---
 
@@ -325,7 +362,10 @@ self-balancing bot (`segby_v1`) on real ESP32 boards today: IMU sensing,
 dual-FOC motors, a host balance loop, and teleop. Implemented and tested (Elixir
 suite + host-compiled C harnesses + the real-C-floor e2e seam): the wire path,
 the on-chip floor, born-stale freshness, the generated contract + cross-language
-parity, and CAN segmentation.
+parity, and CAN segmentation. The same control stack also runs in a **MuJoCo
+physics simulation** (the `BBMCUHub.Sim` seam) where the balance/drive/disarm
+behaviour is developed and regression-tested against faithful dynamics, no
+hardware — see [Drive it in a physics simulation](#drive-it-in-a-physics-simulation-no-hardware-no-chassis).
 
 **Explicitly deferred** (each named in the design, each defaulting to the safe
 behaviour): a `mix bb_mcuhub.gen.robot` scaffold (so v1 robot assembly is the
@@ -342,10 +382,10 @@ boot-loop and motor-sign calibration.
 and its microcontrollers. It is not a general IoT bus, not a ROS/micro-ROS
 replacement, and not a standalone framework.
 
-> There is an optional terminal dashboard (`bb_tui`, the `lostbean/bb_tui` fork)
-> that shows live hub state, freshness, and arming, wired as Stage 5 of the
-> example's [`BRINGUP.md`](examples/segby_v1/BRINGUP.md). No screenshot is
-> committed in this repo yet.
+> There is an optional terminal dashboard (`bb_tui`) that shows live hub state,
+> freshness, and arming, wired as Stage 5 of the example's
+> [`BRINGUP.md`](examples/segby_v1/BRINGUP.md) and live in the MuJoCo sim above.
+> No screenshot is committed in this repo yet.
 
 **Time to first motion, honestly:** assembling the software and watching the
 loop run hardware-free over the Loopback transport is an afternoon for someone
