@@ -199,4 +199,15 @@ defmodule SegbyV1.Sim.MujocoPlantTest do
     [sent] = FakeChild.sent(fake)
     assert Jason.decode!(sent) == %{"op" => "quit"}
   end
+
+  # Regression guard for the smoke-run bug: the real Port child is invoked
+  # `<interpreter> <script.py> <mjcf>`. The args MUST lead with the Python script
+  # (segby_sim.py beside the MJCF), then the MJCF — passing only the MJCF made the
+  # interpreter try to run segby.xml AS Python (SyntaxError on the XML).
+  test "child_args leads with the python script, then the mjcf" do
+    mjcf = "/some/app/sim/segby.xml"
+
+    assert [script, ^mjcf] = MujocoPlant.child_args(mjcf)
+    assert script == "/some/app/sim/segby_sim.py"
+  end
 end

@@ -64,9 +64,9 @@ live with `SegbyV1.Balance.enable(SegbyV1.Robot)`.
 
 Run the whole control stack over a MuJoCo physics model with `mix segby.sim` —
 the transport is swapped for the library's sim seam and a viewer window renders
-the bot in 3D (ADR-0008). One-time `cd sim && uv sync`, then `mix segby.sim` in
-one pane and `mix bb.tui --robot SegbyV1.Robot` in another. See
-[`sim/README.md`](sim/README.md).
+the bot in 3D (ADR-0008). One-time `cd sim && uv sync`, then `mix segby.sim`
+(it brings up the robot + sim + viewer and opens the bb_tui dashboard in the same
+terminal; arm and run `:teleop` to drive). See [`sim/README.md`](sim/README.md).
 
 ## Using this as a template for your own bot
 

@@ -42,8 +42,17 @@ defmodule Mix.Tasks.Segby.Sim do
 
   The host is started FIRST so the `LinkOwner` and the named transport exist; the
   driver is started only AFTER the transport name is registered (it references
-  both). Then the task blocks (`Process.sleep(:infinity)`) so the supervised tree
-  stays up until Ctrl-C, like a server.
+  both). Then the task launches the **bb_tui dashboard in this same node, in the
+  foreground** (`BB.TUI.run/2`) — which blocks until you quit, keeping the whole
+  supervised tree up.
+
+  **Why one node, not two panes.** `bb_tui` attaches to a *running* robot tree over
+  that tree's PubSub registry (`SegbyV1.Robot.PubSub`). A separate `mix bb.tui`
+  invocation is a *different* BEAM node with no distribution to this one, so it would
+  not find the tree (`unknown registry: SegbyV1.Robot.PubSub`). Running the dashboard
+  here, in the node that owns the tree, is the same-node attach the host design
+  assumes (see `SegbyV1.Host`). (To attach a dashboard from a *separate* workstation
+  you'd start this node named and use `mix bb.tui --node ...` — see `BB.TUI`.)
 
   ## Prerequisites
 
@@ -54,18 +63,16 @@ defmodule Mix.Tasks.Segby.Sim do
 
   See `sim/README.md` for the full setup (devShell, the macOS `libpython` symlink).
 
-  ## Operator flow (two panes)
+  ## Operator flow (one command)
 
-      # pane 1 — the virtual robot (this task; long-running, owns the MuJoCo window)
       $ mix segby.sim
 
-      # pane 2 — the dashboard (attaches over BB PubSub, exactly as on a real bot)
-      $ mix bb.tui --robot SegbyV1.Robot
-
-  In `bb.tui`: **arm** the robot (`a`), then run the `:teleop` command in the
-  Commands panel with `forward` / `turn` to drive — the bot you see in the MuJoCo
-  window moves. (Enable the balance loop live from IEx with
-  `SegbyV1.Balance.enable(SegbyV1.Robot)`.)
+  This brings up the robot tree + the sim loop + the MuJoCo viewer window, then opens
+  the bb_tui dashboard in the terminal. In the dashboard: **arm** the robot (`a`),
+  then run the `:teleop` command in the Commands panel with `forward` / `turn` to
+  drive — the bot you see in the MuJoCo window moves. Quit the dashboard (`q`) to
+  stop everything. (Enable the balance loop live from IEx — start with
+  `iex -S mix segby.sim` — via `SegbyV1.Balance.enable(SegbyV1.Robot)`.)
   """
 
   use Mix.Task
@@ -73,6 +80,8 @@ defmodule Mix.Tasks.Segby.Sim do
   # The known name the SIM transport is registered under, so the driver can locate
   # it (`take_commands/1`) — the `LinkOwner` starts it and holds its pid privately
   # (ADR-0008: `Sim.Transport` accepts an optional `:name` for exactly this).
+  @robot SegbyV1.Robot
+
   @transport_name SegbyV1.Sim.Transport
 
   # The driver injects sensor bodies to the owner's mailbox. The owner MUST be the
@@ -123,9 +132,14 @@ defmodule Mix.Tasks.Segby.Sim do
 
     banner(mjcf)
 
-    # 3) Block forever so the supervised tree (host + driver + MuJoCo Port) stays
-    #    up until Ctrl-C, like a server.
-    Process.sleep(:infinity)
+    # 3) Launch the bb_tui dashboard IN THIS NODE, in the foreground. The robot tree
+    #    and the dashboard MUST share a BEAM node — `mix segby.sim` and a separate
+    #    `mix bb.tui` would be two nodes with no distribution, so the dashboard would
+    #    not see SegbyV1.Robot's PubSub. Running it here attaches it to the
+    #    already-running tree over the standard BB PubSub paths. `BB.TUI.run/2` owns
+    #    stdin/stdout and blocks until the dashboard exits — which keeps the whole
+    #    supervised tree (host + driver + MuJoCo Port) up until you quit.
+    BB.TUI.run(@robot, [])
   end
 
   # The MJCF is resolved against the cwd `mix` runs in (the example app root), so
@@ -153,22 +167,19 @@ defmodule Mix.Tasks.Segby.Sim do
   defp banner(mjcf) do
     shell = Mix.shell()
     shell.info("")
-    shell.info("  segby_v1 — virtual robot is UP (ADR-0008)")
+    shell.info("  segby_v1 — virtual robot is UP")
     shell.info("  ─────────────────────────────────────────")
     shell.info("  plant     : #{inspect(@plant)}")
     shell.info("  mjcf      : #{mjcf}")
     shell.info("  transport : #{inspect(@transport_name)} (sim)")
     shell.info("  loop      : #{@tick_ms} ms (~#{round(1000 / @tick_ms)} Hz)")
     shell.info("")
-    shell.info("  Next — open a SECOND terminal and attach the dashboard:")
+    shell.info("  Starting the bb_tui dashboard in THIS terminal (same node as the")
+    shell.info("  robot tree). A MuJoCo viewer window opens separately.")
     shell.info("")
-    shell.info("      mix bb.tui --robot SegbyV1.Robot")
-    shell.info("")
-    shell.info("  Then in bb.tui: ARM (a), run the :teleop command (Commands panel)")
-    shell.info("  with forward/turn to drive — the bot moves in the MuJoCo window.")
-    shell.info("  (Enable balance live: SegbyV1.Balance.enable(SegbyV1.Robot))")
-    shell.info("")
-    shell.info("  Ctrl-C twice to stop.")
+    shell.info("  In the dashboard: ARM (a), then run the :teleop command (Commands")
+    shell.info("  panel) with forward/turn to drive — the bot moves in the MuJoCo")
+    shell.info("  window. Quit the dashboard (q) to stop everything.")
     shell.info("")
   end
 

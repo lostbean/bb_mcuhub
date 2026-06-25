@@ -36,11 +36,12 @@ The Elixir plant that drives this child lives at
    uv sync
    ```
 
-   On **macOS**, re-entering the devShell after `uv sync` symlinks
-   `libpython3.12.dylib` into `.venv/lib` (the shellHook does this) so `mjpython` can
-   dlopen it.
+   On **macOS**, `mjpython` needs `libpython3.12.dylib` symlinked into `.venv/lib`
+   to dlopen it. This is handled automatically — the plant creates the symlink at
+   launch (idempotent), and the devShell shellHook also creates it on entry — so no
+   manual step is required after `uv sync`.
 
-3. **Launch the virtual robot** (pane 1) — from the example app root:
+3. **Launch the virtual robot** — one command, from the example app root:
 
    ```sh
    cd examples/segby_v1
@@ -51,27 +52,24 @@ The Elixir plant that drives this child lives at
    `SegbyV1.Sim.MujocoPlant` and brings up the real `SegbyV1.Host` stack: it injects
    the SIM transport into the host (so the `LinkOwner` owns it), starts the ~50 Hz
    driver that steps the plant and injects sensors back up the stack, opens the
-   MuJoCo viewer window, and then blocks (Ctrl-C twice to stop). The MJCF is resolved
-   from `sim/segby.xml` relative to the app root, so run the task from
-   `examples/segby_v1/`.
+   MuJoCo viewer window, and then launches the **bb_tui dashboard in this same
+   terminal** (it blocks until you quit). The MJCF is resolved from `sim/segby.xml`
+   relative to the app root, so run the task from `examples/segby_v1/`.
 
-4. **Attach the dashboard** (pane 2) — in a SECOND terminal, attach `bb_tui` over BB
-   PubSub exactly as against a real robot:
-
-   ```sh
-   cd examples/segby_v1
-   mix bb.tui --robot SegbyV1.Robot
-   ```
-
-   In `bb.tui`: **arm** the robot (`a`), then run the `:teleop` command in the
+   In the dashboard: **arm** the robot (`a`), then run the `:teleop` command in the
    Commands panel with `forward` / `turn` to drive — the bot you see in the MuJoCo
    window moves. (`:teleop` biases the balance controller's per-wheel effort; it is
-   segby's operator-drive seam — `bb_tui` has no built-in teleop.) Enable the balance
-   loop live from IEx with `SegbyV1.Balance.enable(SegbyV1.Robot)`.
+   segby's operator-drive seam — `bb_tui` has no built-in teleop.) Quit the dashboard
+   (`q`) to stop everything. To enable the balance loop live, start with
+   `iex -S mix segby.sim` and call `SegbyV1.Balance.enable(SegbyV1.Robot)`.
 
-> **Two panes, one robot.** `mix segby.sim` is the long-running virtual robot (it owns
-> the MuJoCo window); `mix bb.tui` is the operator's dashboard. They communicate only
-> over the standard BB PubSub paths — the same way the dashboard talks to a real bot.
+> **One node, not two.** The dashboard attaches to the _running_ robot tree over that
+> tree's PubSub registry (`SegbyV1.Robot.PubSub`). A separate `mix bb.tui` invocation
+> is a different BEAM node with no distribution to this one, so it would not find the
+> tree (`unknown registry: SegbyV1.Robot.PubSub`). `mix segby.sim` therefore runs the
+> dashboard _in the same node_ that owns the tree — the same-node attach the host
+> design assumes. (To attach a dashboard from a separate workstation, start this node
+> named and use `mix bb.tui --node ...` — see `BB.TUI`.)
 
 ### macOS: `mjpython`, not `python`
 

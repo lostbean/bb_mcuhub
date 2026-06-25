@@ -256,16 +256,111 @@ defmodule SegbyV1.Sim.MujocoPlant do
 
   defp wrap_u16(seq), do: seq |> rem(0x1_0000)
 
+  # The Python child script (the MuJoCo stepper) that the interpreter runs, beside
+  # the MJCF in the example's sim/ dir.
+  @child_script "segby_sim.py"
+
   defp port_child_opts(mjcf) do
-    [exe: exe(), args: [mjcf]]
+    [exe: exe(mjcf), args: child_args(mjcf)]
   end
 
-  # macOS needs `mjpython` (the GLFW main-thread rule); Linux uses `python`.
-  defp exe do
-    case :os.type() do
-      {:unix, :darwin} -> System.find_executable("mjpython") || "mjpython"
-      _ -> System.find_executable("python") || "python"
+  @doc """
+  The interpreter args for an `mjcf` path: `[<script.py>, <mjcf>]`. Exposed (and
+  kept separate from interpreter resolution) so it is unit-testable without a real
+  interpreter on the box. Guards the smoke-run bug: the interpreter is invoked
+  `<exe> <script.py> <mjcf>`, so the args MUST lead with the Python script, not the
+  MJCF — passing only the MJCF made the interpreter try to run `segby.xml` as Python.
+  """
+  @spec child_args(binary()) :: [binary()]
+  def child_args(mjcf) do
+    script = Elixir.Path.join(Elixir.Path.dirname(mjcf), @child_script)
+    [script, mjcf]
+  end
+
+  # The interpreter that runs the child. macOS needs `mjpython` (the GLFW
+  # main-thread rule); Linux uses `python`. `:erlang.open_port({:spawn_executable,
+  # …})` needs a REAL PATH, not a bare name to search — a bare name throws an opaque
+  # `:enoent`. So resolve a concrete path: prefer the sim's own `uv` venv (it sits at
+  # `<mjcf dir>/.venv/bin/`, where `uv sync` installs mjpython), then PATH, and if
+  # neither exists raise an actionable error naming the `uv sync` step.
+  defp exe(mjcf) do
+    name =
+      case :os.type() do
+        {:unix, :darwin} -> "mjpython"
+        _ -> "python"
+      end
+
+    venv = Elixir.Path.join(Elixir.Path.dirname(mjcf), ".venv")
+    venv_bin = Elixir.Path.join([venv, "bin", name])
+
+    cond do
+      Elixir.File.exists?(venv_bin) ->
+        ensure_mjpython_libpython(venv, name)
+        venv_bin
+
+      path = System.find_executable(name) ->
+        path
+
+      true ->
+        raise_no_interpreter(name, venv_bin)
     end
+  end
+
+  # macOS `mjpython` re-execs the venv python from inside a Cocoa .app bundle and
+  # dlopens `libpython3.12.dylib` via `@executable_path/../lib/`. uv's venv layout
+  # does not ship that dylib, so without a symlink at `<venv>/lib/` the load fails.
+  # The flake's shellHook creates it — but only on devShell ENTRY, so a venv made
+  # by `uv sync` AFTER entering the shell is missed. Create it here too (idempotent,
+  # venv-local), so the sim works regardless of shellHook timing. No-op off macOS or
+  # if the dylib can't be located.
+  defp ensure_mjpython_libpython(_venv, "python"), do: :ok
+
+  defp ensure_mjpython_libpython(venv, _mjpython) do
+    link = Elixir.Path.join([venv, "lib", "libpython3.12.dylib"])
+
+    unless Elixir.File.exists?(link) do
+      with real_python when is_binary(real_python) <- venv_real_python(venv),
+           lib_dir =
+             Elixir.Path.join(Elixir.Path.dirname(Elixir.Path.dirname(real_python)), "lib"),
+           dylib = Elixir.Path.join(lib_dir, "libpython3.12.dylib"),
+           true <- Elixir.File.exists?(dylib) do
+        Elixir.File.mkdir_p(Elixir.Path.dirname(link))
+        # Best-effort: a failure here just surfaces later as the dlopen error.
+        _ = Elixir.File.ln_s(dylib, link)
+        :ok
+      else
+        _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # The real interpreter the venv `bin/python` symlink points at (uv's managed
+  # CPython), whose sibling `lib/` holds the dylib.
+  defp venv_real_python(venv) do
+    venv_python = Elixir.Path.join([venv, "bin", "python"])
+
+    case Elixir.File.read_link(venv_python) do
+      {:ok, target} -> target
+      _ -> if Elixir.File.exists?(venv_python), do: venv_python
+    end
+  end
+
+  defp raise_no_interpreter(name, venv_bin) do
+    raise """
+    The sim interpreter `#{name}` was not found.
+
+    Looked for the sim's uv venv at:
+        #{venv_bin}
+    and on PATH (`#{name}` is not there either).
+
+    Install the MuJoCo deps once (from the example app root):
+        cd sim && uv sync
+
+    On macOS re-enter the devShell afterwards so the shellHook symlinks
+    libpython for `mjpython` (see sim/README.md).
+    """
   end
 
   defp safe_send_quit(state) do

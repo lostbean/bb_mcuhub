@@ -54,3 +54,9 @@ examples/*/doc/
 
 # Local secrets (wifi creds for the Nerves build, etc.) — never commit
 .env
+
+# example sim (ADR-0008): python bytecode + uv venv (artifacts, not committed).
+# uv.lock is intentionally NOT ignored — it should be committed once `uv sync`
+# generates it, so the sim's MuJoCo deps pin reproducibly (like flake.lock).
+examples/segby_v1/sim/__pycache__/
+examples/segby_v1/sim/.venv/
