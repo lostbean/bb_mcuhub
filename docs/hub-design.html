@@ -3240,6 +3240,68 @@ topology <span class="k">do</span>
             is forbidden.
           </p>
         </div>
+
+        <h3>Running a robot virtually — simulate at the transport</h3>
+        <p>
+          The whole host stack runs <b>without hardware</b> by swapping the one
+          thing that <em>is</em> the hardware boundary — the
+          <b>transport</b> the <code>LinkOwner</code> owns (§07). Above that
+          seam everything is the real robot: the codec, the freshness monitor,
+          the floor's meaning, the views, the dashboard. Below it sits the wire,
+          the hubs, the silicon, and the physical plant. So to run a robot
+          virtually, you replace nothing above the seam and simulate
+          <em>at</em> it — a third transport beside the production UART and the
+          in-process test loopback. Only the transport ever knows whether the
+          robot is real (ADR-0008).
+        </p>
+        <p>
+          The library ships three <b>engine-agnostic</b> pieces. A
+          <b>sim transport</b> (<code>BBMCUHub.Sim.Transport</code>) implements
+          the <code>Host.Transport</code> behaviour and, on each outbound
+          <code>send/2</code>, captures the newest command per
+          <code>(node, port)</code> slot — a pure capture, no clock. A
+          <b>plant</b> (<code>BBMCUHub.Sim.Plant</code>, a behaviour) is the
+          <b>consumer-supplied dynamics</b>: given the latest per-slot commands
+          and a <code>dt</code>, it advances a simulated world and returns the
+          sensor values the hubs would have produced — spoken in
+          <b>value-type values keyed by wire slot</b>, never robot structs, the
+          same byte-/value-generic stance as a <b>safe action</b> (ADR-0005). A
+          <b>driver</b> (<code>BBMCUHub.Sim.Driver</code>) is the real-time
+          loop: a sibling process owning a ~50&nbsp;Hz clock that reads the
+          captured commands, calls <code>Plant.step</code>, and injects each
+          returned sensor back up as a wire body via
+          <code>Codec.encode_body</code> — delivered to the
+          <code>LinkOwner</code> exactly as the UART driver delivers a decoded
+          frame, so the sensor view witnesses a fresh <code>seq</code> advance
+          and <b>born-stale</b> is honored unchanged. The loop lives in the
+          driver, not the transport, so a plant crash restarts the loop without
+          tearing down the link.
+        </p>
+        <p>
+          The split follows ADR-0003: the library ships the building blocks; the
+          <b>consumer</b> writes the plant. The worked example's plant
+          (<code>SegbyV1.Sim.MujocoPlant</code>) drives a headless
+          <b>MuJoCo</b> physics engine over a <code>Port</code> to a small
+          Python child, whose native <code>launch_passive</code> viewer renders
+          the bot in 3D beside the terminal dashboard while an operator teleops
+          it — the real balance loop, floor, and wire path all in the middle.
+          The library itself carries <em>no</em> physics engine and no Python; a
+          different consumer writes a different plant (a pure-Elixir toy
+          pendulum, a recorded-trace replay, another engine) against the same
+          behaviour. This <b>narrows the sim-to-real gap</b> — control logic
+          (balance gains, teleop mixing, the pitch→wheel <em>sign</em>) is
+          developed and de-risked against faithful dynamics before a board is
+          powered — but it does <em>not</em> replace the bench's silicon truths
+          (motor/encoder sign, pin map, FOC alignment), since the sim runs with
+          whatever sign you <em>modeled</em>. It is also distinct from the
+          deterministic, frozen-clock, real-C-floor test seam used for
+          assertions: same philosophy — <em>simulate at the transport</em> — but
+          this one is the interactive, real-clock, physics-backed
+          <b>development</b> surface. <span class="tag t-bad">SAFeD</span> The
+          sim transport, plant behaviour, and driver are specified here and in
+          ADR-0008; v1 builds them as a new library seam plus the example's
+          MuJoCo plant.
+        </p>
       </section>
 
       <!-- ===================== 10 ===================== -->

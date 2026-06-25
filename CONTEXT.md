@@ -277,6 +277,33 @@ malformed value-type value) is **counted as `encode_fail` and skipped, never cra
 the drain** — the floor backstops the unsent command, but the cause stays legible (a
 counter, not a distant floor firing).
 
+### Virtual robot (the sim transport · plant · driver)
+
+Running a robot's **real host stack with no hardware**, by swapping the one thing that
+_is_ the hardware boundary — the **transport** the **LinkOwner** owns. A **sim transport**
+(`BBMCUHub.Sim.Transport`, a third `Host.Transport` beside production UART and the test
+loopback) plays the whole hub tree against a **plant**, so everything above the transport
+— codec, freshness, the floor's meaning, the views, `bb_tui` — runs unchanged and cannot
+tell the robot is virtual (ADR-0008). The **plant** (`BBMCUHub.Sim.Plant`, a behaviour)
+is the **consumer-supplied dynamics**: given the latest per-slot commands and a `dt`, it
+advances a simulated world and returns the sensor values the hubs would have produced —
+spoken in **value-type values keyed by wire slot**, not robot structs (the same
+byte-/value-generic stance as **safe action**, ADR-0005). A **driver**
+(`BBMCUHub.Sim.Driver`) is the engine-agnostic real-time loop: a sibling process that owns
+the `~50 Hz` clock, reads the transport's captured commands, calls `Plant.step`, and
+injects the returned sensors up as wire bodies (so the sensor views see a fresh **seq**
+advance and **born-stale** is honored). The library ships these three engine-agnostic
+pieces; a **consumer** writes the plant — segby's is a MuJoCo plant
+(`SegbyV1.Sim.MujocoPlant`) over a `Port` to a headless Python child whose native
+`launch_passive` viewer renders the bot in 3D beside the terminal `bb_tui` (ADR-0003 split:
+library building blocks, example plant). It **narrows the sim-to-real gap** — develop and
+de-risk control (balance gains, teleop, the pitch→wheel sign) against faithful dynamics
+before the bench — but does **not** replace the bench's silicon truths (motor/encoder sign,
+pin map, FOC alignment), since the sim runs with whatever sign you _modeled_. Distinct from
+the test **VirtualHub** (the deterministic, frozen-clock, real-C-floor _assertion_ seam):
+the virtual robot is the interactive, real-clock, physics-backed _dev_ seam; both share
+the philosophy "simulate at the transport" and nothing else.
+
 ### Component (the BeamBots view)
 
 A thin `BB.Sensor` / `BB.Actuator` that surfaces a hub's port to BeamBots. A _view_: it

@@ -10,6 +10,49 @@ Format: newest first. Dates are absolute.
 
 ---
 
+## 2026-06-25 — A robot can run virtually: a sim transport closes the host loop over a physics engine (ADR-0008, design-only)
+
+The chassis is not yet assembled, and even once it is, you do not want an un-tuned
+balance loop's first real test to be on hardware that can hurt itself. Every existing
+hardware-free path stops short of "a real, moving, controllable robot with faithful
+dynamics": the example's `LoopbackTransport` has no plant (a motor command goes out and
+nothing moves), and the test `VirtualHub` runs the real C floor but on a **frozen clock**
+for deterministic assertion — it is `:test`-only and has no real-time loop. So there is no
+way to _develop_ control software against a virtual bot and shrink the sim-to-real gap
+before the bench.
+
+ADR-0008 closes that by simulating at **the one boundary the whole stack already pivots
+on — the transport**. A new `BBMCUHub.Sim` transport (a third implementation of the
+existing `BBMCUHub.Host.Transport` behaviour, beside UART and loopback) plays the hub
+tree against a physics engine:
+
+- It captures each outbound actuator command from `send/2` (which is event-driven and
+  clock-free), advances a **`Plant`** (a new public library behaviour — consumer-supplied
+  dynamics, robot-agnostic, speaking value-type values keyed by wire slot, in the spirit
+  of ADR-0005), and injects the resulting sensor readings back up as wire bodies built
+  with `Codec.encode_body` and delivered as `{:circuits_uart, :sim, body}`.
+- Everything **above** the transport is the unchanged real stack — codec, freshness
+  monitor (born-stale honored via the injected `seq`/`t_dev`), floor semantics, views,
+  `bb_tui` over BB PubSub. Only the transport knows the robot is virtual.
+- The chosen built-in plant is **MuJoCo over a Port** (faithful-from-the-start, the
+  decision): a headless Python child running MuJoCo's `launch_passive` viewer — which
+  does not auto-step or pace, so **Elixir owns the clock** via a ~50 Hz live loop — sets
+  `data.ctrl`, steps, and returns `data.sensordata`. A **native 3D viewer window** renders
+  the bot beside the terminal `bb_tui`; the operator teleops the virtual bot through the
+  genuine control software.
+
+This **widens the library's public surface** (`BBMCUHub.Sim.Plant` + the sim transport),
+makes the transport-is-the-hardware-boundary invariant load-bearing in three places (UART,
+test loopback/`VirtualHub`, sim), and pulls MuJoCo into the **dev toolchain only** (the
+shipped library/firmware are untouched; the plant is opt-in). It **narrows** the
+sim-to-real gap but does not replace BRINGUP Stage 4's silicon truths (motor-phase/encoder
+sign, pin map, FOC alignment, real IMU noise) — MuJoCo runs with whatever sign you modeled;
+the bench still reveals the actual one. Design-only; not yet implemented. See ADR-0008 for
+the seam, the live-loop/clock split from `VirtualHub`, and the open implementation
+questions (where the loop lives, the Port wire format, hand-authored vs IR-generated MJCF).
+
+---
+
 ## 2026-06-23 — Root-ness is firmware-realized from a generated ROOT_NODE (the -DROOT_HUB flag is gone)
 
 ADR-0006 made root-ness **declared** in the IR — the hub with `parent: :host` is the
