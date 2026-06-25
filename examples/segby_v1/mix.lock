@@ -1,6 +1,6 @@
 %{
   "bb": {:git, "https://github.com/lostbean/bb.git", "4f1995e9b40b1a0ed1c242dc4d691cbb0d040d8f", [branch: "feat/controller-safety-state-hook"]},
-  "bb_tui": {:git, "https://github.com/lostbean/bb_tui.git", "d5d2fb8854198c225f61b500601823af621622c6", [branch: "feat/consumer-renderers"]},
+  "bb_tui": {:git, "https://github.com/mcass19/bb_tui.git", "95f3becd624abf73b969a28266adb9a94262e827", []},
   "circuits_uart": {:hex, :circuits_uart, "1.6.0", "259e8126b4004648e1bba6da5827b9e473b7e09e1eb4357f0026a1d9f274fce2", [:mix], [{:elixir_make, "~> 0.6", [hex: :elixir_make, repo: "hexpm", optional: false]}], "hexpm", "9f0bdf612706b16beb2026a9e316cc313b919c35b663c1177d374b1f7330b790"},
   "complex": {:hex, :complex, "0.7.0", "695632ef9487517aa5d57edd1697801079d622414cb2e1a7cf538b1f9a50f205", [:mix], [], "hexpm", "0ee39c0803129f546e7f3f640da8f021c9e659402bf59da6f7f2c4848f068f8d"},
   "decimal": {:hex, :decimal, "3.1.1", "430d87b04011ce6cbd4fd205be758311a81f87d552d40904abd00f015935b1d0", [:mix], [], "hexpm", "c5f25f2ced74a0587d03e6023f595db8e924c9d3922c8c8ffd9edfc4498cf1f6"},

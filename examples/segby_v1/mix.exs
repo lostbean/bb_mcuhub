@@ -43,14 +43,15 @@ defmodule SegbyV1.MixProject do
       # so SegbyV1.Balance can gate its output on disarm (ADR-0010, beam-bots/bb#160).
       {:bb, github: "lostbean/bb", branch: "feat/controller-safety-state-hook", override: true},
       # The terminal dashboard over the BeamBots seam (§09). ONLY segby uses it, so
-      # it lives here (the library no longer depends on bb_tui — ADR-0003). Pinned
-      # to a fork (feat/consumer-renderers) that adds two GENERIC, upstreamable
-      # extensions: configurable `:subscribe_paths` (feed the dashboard from the slow
-      # `[:observe]` topic, not the control firehose) and a `:renderers` seam (a
-      # consumer teaches the dashboard how to render its own payload — here
-      # SegbyV1.ObserveRenderer renders our Observer.Sample; bb_tui stays generic).
-      # ADR-0004. Both changes are upstreamable; see lostbean/bb_tui.
-      {:bb_tui, github: "lostbean/bb_tui", branch: "feat/consumer-renderers"},
+      # it lives here (the library no longer depends on bb_tui — ADR-0003). It
+      # provides two GENERIC extensions segby relies on: configurable
+      # `:subscribe_paths` (feed the dashboard from the slow `[:observe]` topic, not
+      # the control firehose) and a `:renderers` seam (a consumer teaches the
+      # dashboard how to render its own payload — here SegbyV1.ObserveRenderer
+      # renders our Observer.Sample; bb_tui stays generic). ADR-0004. These were
+      # carried on the lostbean/bb_tui fork and have since been MERGED UPSTREAM, so
+      # this points at upstream `mcass19/bb_tui` directly (fork no longer needed).
+      {:bb_tui, github: "mcass19/bb_tui"},
       # JSON codec for the sim Port wire to the MuJoCo Python child (ADR-0008).
       # The plant frames commands/state as JSON-per-line over the Port; this is a
       # sim-only concern of THIS consumer (the library ships no JSON dep).
