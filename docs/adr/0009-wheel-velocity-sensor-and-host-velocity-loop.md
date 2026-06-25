@@ -122,6 +122,43 @@ right_torque = balance_torque + kv · (target_right − measured_right)
   sign-off — not guessed. The control law stays **on the host** (the project's
   pattern: the MCU _reports_, the host _closes the loop_).
 
+### Amendment — turn is a closed yaw-rate loop, not open-loop differential speed
+
+The law above (as first built) makes **forward** a closed wheel-speed loop, but
+**turn** an _open-loop_ differential of the wheel-speed targets: it differentials
+the targets and hopes the chassis yaw follows. It does, gently — but a **sustained
+hard turn** has no feedback regulating the actual yaw, so yaw-coupled energy the
+pitch-only balance PID cannot reject builds up and the bot eventually topples. This
+is gain-independent: lowering `max_turn_speed` only delays it. (The original ADR
+flagged this as a known limit.)
+
+The fix closes a loop on the **measured yaw rate** — which is already on the wire:
+the IMU's `angular_velocity.z` is the chassis yaw rate (verified in MuJoCo: a
+differential torque spins the gyro's Z axis, X/Y ≈ 0). `turn` now commands a
+**target yaw rate** (rad/s), and a yaw-rate controller drives the _differential_
+torque so the measured yaw tracks it:
+
+```
+fwd_target      = forward · max_speed                 # the (kept) forward speed loop
+target_yaw_rate = turn · max_yaw_rate                 # turn commands a YAW RATE now
+turn_torque     = kyaw · (target_yaw_rate − gyro_z)   # closed on measured yaw
+
+left_torque  = balance_torque + kv · (fwd_target − measured_left)  − turn_torque
+right_torque = balance_torque + kv · (fwd_target − measured_right) + turn_torque
+```
+
+Because the differential torque is regulated by the _measured_ yaw, it **cannot run
+away**: as the bot yaws faster, `(target_yaw_rate − gyro_z)` shrinks and the
+differential backs off. Any commanded turn rate is self-limiting, so a sustained
+hard turn stays stable.
+
+- `max_turn_speed` is **replaced** by `max_yaw_rate` (rad/s, the commandable yaw
+  rate at `turn = 1`) and `kyaw` (the yaw-loop gain). `max_speed`/`kv` (forward) are
+  unchanged. Numbers tuned headless against the real loop.
+- This is still **example-only and on the host** — no new port, no firmware change
+  (gyro Z already rides the IMU pose). It refines this ADR's host control law; it
+  does not change the wire contract.
+
 ### What it is, and is not
 
 - **It is** the faithful fix: torque command preserved (matches the FOC), velocity

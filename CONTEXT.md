@@ -241,9 +241,14 @@ run an **inner velocity loop**: operator teleop sets a per-wheel _target speed_ 
 controller adds `kv · (target − measured)` to the per-wheel balance torque. The wheel
 command stays **torque** (faithful to the real torque-voltage FOC); the velocity loop is a
 host control law on top — so "forward" means a _bounded speed_, not an unbounded torque
-(acceleration) bias that runs the wheels away. Distinct from the **status slot**: that is
-liveness; this is measurement. This lives entirely in the **example** (`segby_v1`): a
-consumer value-type + ports on the stock seams (ADR-0003) — the library is untouched.
+(acceleration) bias that runs the wheels away. **Turn** is likewise closed-loop: it
+commands a _target yaw rate_, and a yaw-rate controller (`kyaw · (target − gyro_z)`, the
+IMU's yaw rate already on the wire) drives the differential torque so the measured yaw
+tracks it — self-limiting, so a sustained hard turn can't run away (the open-loop
+differential-speed turn it replaced eventually toppled the pitch-only balancer). Distinct
+from the **status slot**: that is liveness; this is measurement. This lives entirely in the
+**example** (`segby_v1`): a consumer value-type + ports on the stock seams (ADR-0003) — the
+library is untouched.
 
 ### The frame
 

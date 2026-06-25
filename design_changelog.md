@@ -10,6 +10,28 @@ Format: newest first. Dates are absolute.
 
 ---
 
+## 2026-06-25 — Turn becomes a closed yaw-rate loop, not open-loop differential speed (ADR-0009 amendment)
+
+ADR-0009's first build made **forward** a closed wheel-speed loop but **turn** an
+_open-loop_ differential of the wheel-speed targets — nothing regulated the actual chassis
+yaw, so a _sustained hard turn_ pumped yaw-coupled energy the pitch-only balance PID can't
+reject and the bot eventually toppled (gain-independent; lowering `max_turn_speed` only
+delayed it). The original ADR flagged this as a known limit.
+
+Resolved by closing a loop on the **measured yaw rate**, which is already on the wire: the
+IMU's `angular_velocity.z` IS the chassis yaw rate (verified in MuJoCo — a differential
+torque spins the gyro Z axis, X/Y ≈ 0). `turn` now commands a _target yaw rate_, and a
+yaw-rate controller drives the differential torque so the measured yaw tracks it:
+`turn_torque = kyaw · (turn · max_yaw_rate − gyro_z)`, subtracted from the left wheel and
+added to the right, on top of the unchanged forward speed loop. Because the differential is
+regulated by the measured yaw, it can't run away — any commanded turn rate self-limits, so
+sustained hard turns stay stable. `max_turn_speed` is replaced by `max_yaw_rate` + `kyaw`
+(tuned headless against the real loop). Still example-only and host-side — no new port, no
+firmware change (gyro Z already rides the IMU pose); it refines the ADR-0009 host control
+law, not the wire contract. See the ADR-0009 amendment.
+
+---
+
 ## 2026-06-25 — A wheel reports its speed as a sensor port; the host closes a velocity loop on top of balance (ADR-0009, design-only)
 
 Driving the (now-balancing) sim bot is unusable: teleop biases the wheels with **torque**,
