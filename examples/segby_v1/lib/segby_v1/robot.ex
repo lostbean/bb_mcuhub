@@ -45,19 +45,25 @@ defmodule SegbyV1.Robot do
     # actuator). Starts DISABLED; enable live via `SegbyV1.Balance.enable/1`.
     controller(
       :balance,
-      {SegbyV1.Balance,
-       pose_topic: [:sensor, :base_link, :chassis_imu],
-       left_actuator_path: [:base_link, :left_wheel, :left_drive],
-       right_actuator_path: [:base_link, :right_wheel, :right_drive],
-       kp: 0.5,
-       ki: 0.05,
-       kd: 0.1,
-       target_pitch: 0.0,
-       integral_clamp: 1.0,
-       output_clamp: 1.0,
-       max_forward: 0.5,
-       max_turn: 0.3,
-       enabled: false}
+      {
+        SegbyV1.Balance,
+        # Tuned against the real closed loop in the MuJoCo sim (ADR-0008): holds the
+        # bot upright and recovers from a nudge to <1°. kd stays small — a large
+        # derivative destabilizes on the noisy 100 Hz loop with clamp saturation.
+        # (The absolute drive sign is set by the sim MJCF actuator gear, not here.)
+        pose_topic: [:sensor, :base_link, :chassis_imu],
+        left_actuator_path: [:base_link, :left_wheel, :left_drive],
+        right_actuator_path: [:base_link, :right_wheel, :right_drive],
+        kp: 8.0,
+        ki: 0.3,
+        kd: 0.2,
+        target_pitch: 0.0,
+        integral_clamp: 1.0,
+        output_clamp: 1.0,
+        max_forward: 0.5,
+        max_turn: 0.3,
+        enabled: false
+      }
     )
   end
 

@@ -274,7 +274,14 @@ defmodule SegbyV1.Sim.MujocoPlant do
   @spec child_args(binary()) :: [binary()]
   def child_args(mjcf) do
     script = Elixir.Path.join(Elixir.Path.dirname(mjcf), @child_script)
-    [script, mjcf]
+    # `SEGBY_SIM_HEADLESS=1` runs the child without the MuJoCo viewer window — for
+    # automated balance/regression tests on a box with no display (where
+    # launch_passive segfaults). Physics is identical; only rendering is skipped.
+    if System.get_env("SEGBY_SIM_HEADLESS") == "1" do
+      [script, "--headless", mjcf]
+    else
+      [script, mjcf]
+    end
   end
 
   # The interpreter that runs the child. macOS needs `mjpython` (the GLFW

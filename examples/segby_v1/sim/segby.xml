@@ -61,10 +61,20 @@
   <!--
     Actuators: direct torque on each wheel hinge. ORDER IS LOAD-BEARING:
     index 0 = left (ctrl[0]), index 1 = right (ctrl[1]). ctrlrange ~ +/- 1.0 N.m.
+
+    gear="-1" is the SIM's "motor wiring": it sets the ABSOLUTE sign that decides
+    whether the host's commanded torque drives UNDER a fall or amplifies it. The
+    host sign convention (+pitch -> negative torque) is pinned host-side by
+    preflight_test; whether that physically corrects the fall is the motor/encoder
+    direction — on real hardware you'd fix a backwards motor with encoder.invert at
+    the bench, here it's this gear sign. Verified in MuJoCo: with gear="-1" the
+    host's negative torque induces negative pitch (drives under a forward fall);
+    with +1 it amplified the fall. Do NOT "fix" this by flipping the controller
+    error sign — that would invert the host convention preflight guards.
   -->
   <actuator>
-    <motor name="left_wheel_motor" joint="wheel_l_joint" ctrlrange="-1.0 1.0"/>
-    <motor name="right_wheel_motor" joint="wheel_r_joint" ctrlrange="-1.0 1.0"/>
+    <motor name="left_wheel_motor" joint="wheel_l_joint" gear="-1" ctrlrange="-1.0 1.0"/>
+    <motor name="right_wheel_motor" joint="wheel_r_joint" gear="-1" ctrlrange="-1.0 1.0"/>
   </actuator>
 
   <sensor>

@@ -29,6 +29,7 @@ the executable; this script is identical under either.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import mujoco
@@ -69,19 +70,51 @@ def _names(model: mujoco.MjModel, obj_type: int, count: int) -> list[str]:
     return [mujoco.mj_id2name(model, obj_type, i) for i in range(count)]
 
 
+class _NullViewer:
+    """A no-op stand-in for the passive viewer, for HEADLESS runs (no display).
+
+    Lets the command loop stay byte-identical whether or not a viewer window is
+    open — `sync()` does nothing, `is_running()` is always true. Used for automated
+    balance/regression tests where there is no display (and `launch_passive` would
+    segfault) — the physics is identical to a windowed run, only the rendering is
+    skipped. Enable with the `--headless` arg or `SEGBY_SIM_HEADLESS=1`.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def sync(self):
+        pass
+
+    def is_running(self):
+        return True
+
+
 def main() -> int:
-    if len(sys.argv) < 2:
-        sys.stderr.write("usage: segby_sim.py <path-to-mjcf.xml>\n")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    if not args:
+        sys.stderr.write("usage: segby_sim.py [--headless] <path-to-mjcf.xml>\n")
         return 2
 
-    mjcf_path = sys.argv[1]
+    mjcf_path = args[0]
+    headless = "--headless" in flags or os.environ.get("SEGBY_SIM_HEADLESS") == "1"
+
     model = mujoco.MjModel.from_xml_path(mjcf_path)
     data = mujoco.MjData(model)
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
+    # Windowed: the real passive viewer. Headless: a no-op shim (no display, no
+    # GLFW) so the same loop runs under automated tests.
+    viewer_ctx = _NullViewer() if headless else mujoco.viewer.launch_passive(model, data)
+
+    with viewer_ctx as viewer:
         _emit(
             {
                 "event": "ready",
+                "headless": headless,
                 "actuators": _names(model, mujoco.mjtObj.mjOBJ_ACTUATOR, model.nu),
                 "sensors": _names(model, mujoco.mjtObj.mjOBJ_SENSOR, model.nsensor),
             }

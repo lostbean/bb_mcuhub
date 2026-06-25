@@ -91,9 +91,13 @@ defmodule Mix.Tasks.Segby.Sim do
 
   @plant SegbyV1.Sim.MujocoPlant
 
-  # ~50 Hz, matching the balance/control cadence (the driver's default, made
-  # explicit here so the operator sees the loop rate).
-  @tick_ms 20
+  # 10 ms = 100 Hz, matching the pose sensor's declared rate (blaster `pose` is
+  # 100 Hz) and its view `beat_ms: 10`. The driver steps physics + emits one fresh
+  # pose per tick, so ticking at the sensor rate means EVERY balance compute sees
+  # fresh data with a correct dt — ticking slower (e.g. 50 Hz under a 100 Hz view)
+  # makes half the balance computes run on duplicated sensor data with a too-small
+  # dt, silently mis-scaling ki/kd.
+  @tick_ms 10
 
   @impl Mix.Task
   def run(_args) do
@@ -129,6 +133,12 @@ defmodule Mix.Tasks.Segby.Sim do
         plant_opts: [mjcf: mjcf],
         tick_ms: @tick_ms
       )
+
+    # 2b) Enable the balance loop. The robot's own default is DISABLED (so a real
+    #     board boots passive and safe — see SegbyV1.Robot), but the WHOLE POINT of
+    #     the sim is to watch the bot balance, so the sim turns it on. Without this
+    #     the wheels get a constant 0.0 N·m and the bot just topples.
+    SegbyV1.Balance.enable(@robot)
 
     banner(mjcf)
 
@@ -173,6 +183,7 @@ defmodule Mix.Tasks.Segby.Sim do
     shell.info("  mjcf      : #{mjcf}")
     shell.info("  transport : #{inspect(@transport_name)} (sim)")
     shell.info("  loop      : #{@tick_ms} ms (~#{round(1000 / @tick_ms)} Hz)")
+    shell.info("  balance   : ENABLED (the sim turns it on; hardware default is off)")
     shell.info("")
     shell.info("  Starting the bb_tui dashboard in THIS terminal (same node as the")
     shell.info("  robot tree). A MuJoCo viewer window opens separately.")
