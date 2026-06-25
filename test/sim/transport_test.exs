@@ -102,4 +102,14 @@ defmodule BBMCUHub.Sim.TransportTest do
     assert :ok = Transport.close(t)
     refute Process.alive?(t)
   end
+
+  test "an optional :name registers the transport so it can be reached by name" do
+    name = :"sim_transport_#{System.unique_integer([:positive])}"
+    {:ok, t} = Transport.start_link(self(), name: name)
+    on_exit(fn -> if Process.alive?(t), do: Transport.close(t) end)
+
+    # the named transport answers the sim seam by its name, not just its pid
+    assert Transport.owner(name) == self()
+    assert Transport.take_commands(name) == %{}
+  end
 end

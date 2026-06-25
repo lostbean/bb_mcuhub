@@ -90,8 +90,8 @@ foundation this whole feature rests on, and it is already true in the codebase.
 This decision draws the line exactly where ADR-0003 draws every other: **the library
 ships the reusable, engine-agnostic building blocks; the consumer (the example) ships
 the robot-specific plant.** The right question is "what is the best library interface
-for someone building a bot on bb_mcuhub who wants to run it virtually" — and the answer
-is _a behaviour and a generic driver_, never a baked-in physics engine.
+for someone building a bot on bb*mcuhub who wants to run it virtually" — and the answer
+is \_a behaviour and a generic driver*, never a baked-in physics engine.
 
 **Library** (`lib/bb_mcuhub/sim/`, reusable, never edited by a consumer):
 
@@ -246,6 +246,11 @@ Load-bearing constraints, captured so the implementation does not rediscover the
 - **The transport-is-the-boundary invariant is now load-bearing in three places**
   (UART, test loopback/VirtualHub, sim). Any future change to the `Transport`
   behaviour must keep all three honest.
+- **`Sim.Transport` accepts an optional `:name`.** The `LinkOwner` starts the
+  transport (`transport.start_link(self(), transport_opts)`) and holds its pid
+  privately, so a sibling `Sim.Driver` cannot reach it by pid. Naming the transport
+  (`transport_opts: [name: ...]`) lets the driver locate it to `take_commands/1` — the
+  seam that wires the generic library pieces together in a consumer's host tree.
 - **Reproducibility is a property of the loop, not the bridge.** A later
   deterministic test mode can reuse the exact `Plant` on an explicit step clock — the
   interactive loop and a frozen-clock test differ only in who calls `step`.

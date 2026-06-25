@@ -47,7 +47,13 @@ defmodule BBMCUHub.Sim.Transport do
   @impl BBMCUHub.Host.Transport
   @spec start_link(pid(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(owner, opts) when is_pid(owner) and is_list(opts) do
-    GenServer.start_link(__MODULE__, owner)
+    # An optional `:name` lets a consumer locate this transport after the LinkOwner
+    # starts it (the LinkOwner holds the pid privately), so a sibling `Sim.Driver`
+    # can `take_commands/1` from it by name. Unnamed by default (tests pass a pid).
+    case Keyword.get(opts, :name) do
+      nil -> GenServer.start_link(__MODULE__, owner)
+      name -> GenServer.start_link(__MODULE__, owner, name: name)
+    end
   end
 
   @impl BBMCUHub.Host.Transport
