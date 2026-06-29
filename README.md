@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/lostbean/bb_mcuhub/actions/workflows/ci.yml"><img src="https://github.com/lostbean/bb_mcuhub/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/elixir-~%3E%201.18-purple.svg" alt="Elixir ~> 1.18">
+  <img src="https://img.shields.io/badge/elixir-~%3E%201.19-purple.svg" alt="Elixir ~> 1.19">
 </p>
 
 **bb_mcuhub is an Elixir library (plus a C/ESP32 firmware kit) that connects a
@@ -106,11 +106,11 @@ no transceiver.** The root hub speaks UART up to the host; child links can be
 UART (point-to-point, no transceiver) or CAN (shared bus, needs a transceiver).
 CAN is supported but optional — the worked example is UART-only.
 
-**Prerequisites:** Elixir 1.18+ and the BeamBots `bb` framework on the host; an
+**Prerequisites:** Elixir 1.19+ and the BeamBots `bb` framework on the host; an
 ESP32 (arduino-esp32 3.x / ESP-IDF 5.x, via the `pioarduino` PlatformIO fork)
 for firmware. **Nix is not required** — it's a convenience for a pinned,
 reproducible toolchain (see [Build & test](#build--test)); bring your own Elixir
-1.18+ and PlatformIO if you prefer.
+1.19+ and PlatformIO if you prefer.
 
 ---
 
@@ -392,7 +392,7 @@ views.
 
 A reproducible toolchain (Elixir, PlatformIO, clang/make) is pinned in
 `flake.nix`. Either run `nix develop` (or `direnv allow`) in any worktree first,
-**or** bring your own Elixir 1.18+ and PlatformIO. See `CLAUDE.md`.
+**or** bring your own Elixir 1.19+ and PlatformIO. See `CLAUDE.md`.
 
 | Stratum                | Command                                                    |
 | ---------------------- | ---------------------------------------------------------- |
@@ -407,8 +407,7 @@ cannot drift past it. The library has no deployable ESP32 env of its own;
 `firmware/` is a chassis library (`library.json`) a consumer pulls via
 `lib_deps`.
 
-Elixir 1.18+ is required. (The `bb` dependency requests 1.19; it runs fine on
-1.18 — the requirement is a compile-time warning only.)
+Elixir 1.19+ is required (the `bb` dependency, `>= 0.22`, requires `~> 1.19`).
 
 ---
 

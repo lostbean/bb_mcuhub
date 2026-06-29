@@ -50,7 +50,7 @@ defmodule SegbyV1Nerves.MixProject do
     [
       app: @app,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.19",
       archives: [nerves_bootstrap: "~> 1.15"],
       start_permanent: Mix.env() == :prod,
       deps: deps(),

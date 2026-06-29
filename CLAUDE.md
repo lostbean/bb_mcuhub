@@ -4,7 +4,7 @@
 ecosystem through one recursive abstraction — **the hub**. The repo has two
 strata that build and test independently:
 
-- **Elixir host** — a Mix app (`:bb_mcuhub`, `elixir ~> 1.18`) that runs on the
+- **Elixir host** — a Mix app (`:bb_mcuhub`, `elixir ~> 1.19`) that runs on the
   board above the hub tree, owns the UART to the root hub, and exposes the
   BeamBots seam (host control, codec, scheduler, TUI dashboard).
 - **C / ESP32 firmware** — `firmware/` is the C chassis, packaged as a PlatformIO
@@ -53,7 +53,7 @@ gitignored and the venv launcher is pinned to an absolute main-tree path, so it
 does **not** work in a fresh worktree — use the devShell instead.)
 
 - **Dev shell** — run `nix develop` from the repo root to enter a shell with
-  Elixir 1.18, Erlang/OTP, PlatformIO 6.1, clang, make, and lefthook. Or let
+  Elixir 1.19, Erlang/OTP, PlatformIO 6.1, clang, make, and lefthook. Or let
   direnv load it automatically (`direnv allow` once). Inputs are pinned in
   `flake.lock`.
 - **Formatting** — `nix fmt` formats the whole repo via treefmt (mix-format for

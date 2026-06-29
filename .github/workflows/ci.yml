@@ -26,10 +26,16 @@ permissions:
   contents: read
 
 env:
-  # Pin to the toolchain the flake pins (Elixir 1.18 on OTP 28 — the line the
-  # Pi runs; see flake.nix). Keep these in lockstep with flake.nix.
-  ELIXIR_VERSION: "1.18.4"
+  # Pin to the toolchain the flake pins (Elixir 1.19 on OTP 28 — the line the
+  # Pi runs; see flake.nix). Keep these in lockstep with flake.nix. The `bb`
+  # dependency (>= 0.22) requires elixir ~> 1.19, so 1.18 can no longer resolve it.
+  ELIXIR_VERSION: "1.19.5"
   OTP_VERSION: "28.0"
+  # Hex 2.5.0 (released 2026-06-28) calls `:re.import/3`, removed in OTP 28's
+  # PCRE2 `:re` — so it crashes on startup before `mix deps.get` runs. setup-beam
+  # installs the latest Hex and has no version input, so pin the last working one
+  # explicitly until a Hex > 2.5.0 fixes the OTP-28 break. (The devShell uses 2.4.2.)
+  HEX_VERSION: "2.4.2"
 
 jobs:
   # --- Elixir library (root app :bb_mcuhub) -------------------------------
@@ -47,6 +53,11 @@ jobs:
         with:
           otp-version: ${{ env.OTP_VERSION }}
           elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      # setup-beam installs the latest Hex (2.5.0), which crashes on OTP 28 (see
+      # the HEX_VERSION note above). Pin a working Hex before any mix command.
+      - name: Pin Hex (OTP-28 compatible)
+        run: mix local.hex ${{ env.HEX_VERSION }} --force
 
       - name: Cache deps and _build
         uses: actions/cache@v5
@@ -86,6 +97,11 @@ jobs:
         with:
           otp-version: ${{ env.OTP_VERSION }}
           elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      # setup-beam installs the latest Hex (2.5.0), which crashes on OTP 28 (see
+      # the HEX_VERSION note above). Pin a working Hex before any mix command.
+      - name: Pin Hex (OTP-28 compatible)
+        run: mix local.hex ${{ env.HEX_VERSION }} --force
 
       - name: Cache deps and _build
         uses: actions/cache@v5

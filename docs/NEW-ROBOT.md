@@ -55,8 +55,8 @@ freshness behaviour against the _real firmware C floor_, the test-only
 `BBMCUHub.Test.VirtualHub` does the same with the actual C wire path behind it.
 
 **Do you need Nix?** No. Nix is a convenience for a reproducible, pinned toolchain
-shared across worktrees (Elixir 1.18, PlatformIO 6.1, clang/make). Bring your own
-Elixir 1.18+ and PlatformIO if you prefer; the devShell just guarantees matching
+shared across worktrees (Elixir 1.19, PlatformIO 6.1, clang/make). Bring your own
+Elixir 1.19+ and PlatformIO if you prefer; the devShell just guarantees matching
 versions.
 
 **The order is the backbone.** Each step produces what the next consumes: a

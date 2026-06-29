@@ -2,7 +2,7 @@
   # bb_mcuhub dev environment.
   #
   # Two strata live in this repo (see CONTEXT.md / docs/hub-design.html):
-  #   - Elixir host code  (Mix app :bb_mcuhub, elixir ~> 1.18) — `mix test`
+  #   - Elixir host code  (Mix app :bb_mcuhub, elixir ~> 1.19) — `mix test`
   #   - C / ESP32 firmware (firmware/, PlatformIO) — `pio run`, plus host-compiled
   #     C test harnesses under firmware/test/ built with a Makefile (cc/clang).
   #
@@ -15,7 +15,7 @@
 
   inputs = {
     # nixos-unstable: it ships the exact toolchain versions this project targets
-    # — elixir 1.18.4 (~> 1.18), platformio 6.1.19 (matches the .pio-venv core),
+    # — elixir 1.19.5 (~> 1.19), platformio 6.1.19 (matches the .pio-venv core),
     # clang 21.x, lefthook. (Switch to "nixos-25.05" for the stable channel.)
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -75,12 +75,12 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             # --- Elixir host stratum ---
-            # Elixir 1.18 on OTP 28 (both pinned to erlang_28 so `mix` and the
+            # Elixir 1.19 on OTP 28 (both pinned to erlang_28 so `mix` and the
             # standalone BEAM agree). OTP 28 is required by nerves_system_rpi0_2
-            # ~> 2.0 (the OTP-28 line the Pi runs); a 1.18-on-OTP-27 elixir makes
+            # ~> 2.0 (the OTP-28 line the Pi runs); a 1.19-on-OTP-27 elixir makes
             # `mix firmware` fail the host/target OTP-major check. Satisfies the
-            # apps' `elixir ~> 1.18`.
-            beam.packages.erlang_28.elixir_1_18 # Elixir 1.18.x on OTP 28
+            # apps' `elixir ~> 1.19` (the `bb` dep >= 0.22 requires ~> 1.19).
+            beam.packages.erlang_28.elixir_1_19 # Elixir 1.19.x on OTP 28
             erlang_28 # OTP 28 — matches the elixir above + nerves rpi0_2 2.x
 
             # --- C / ESP32 firmware stratum ---
