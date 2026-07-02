@@ -10,6 +10,36 @@ Format: newest first. Dates are absolute.
 
 ---
 
+## 2026-07-02 — The router becomes direction-aware: a downlink arrival ascends; the table serves only descents (ADR-0011, amends ADR-0006)
+
+A consumer report from the `segby_v1` two-board bring-up (issue #9) exposed a wrong
+model at the heart of the relay path: the wire's single NODE field names _the hub end
+of a host↔hub conversation_ — the destination on a descending command but the **source**
+on an ascending sense/status frame — yet ADR-0006's router treated it as a destination
+always, looking up `route_table[f->node]` for every frame with no notion of where the
+frame arrived from (both of a root's RX paths fed the same `hub_on_body(body, len)`).
+The root therefore reflected every leaf→host frame back down the downlink it had just
+arrived on: commands descended fine, telemetry never ascended, and any leaf behind a
+relay was silently invisible to the host — no CRC errors, no drops, flat stats. The
+multi-hop topology ADR-0006 exists to enable did not work, and every test layer missed
+it (the C harness only routed destination-addressed frames; the VirtualHub NIF didn't
+compile `router.c`; the MuJoCo sim bypasses the C router entirely).
+
+Resolved by making **direction the first routing decision** (ADR-0011): the link layer
+tags each verified body with the local link index it arrived on, and `router_route`
+takes it. A frame from a **downlink** ascends — forwarded up (link 0) unconditionally,
+no table lookup, no local delivery, so nothing a child injects can ever travel down
+(one-writer at the wire level: the parent side is the sole source of descending
+traffic; the split-horizon-with-fallback alternative was rejected exactly because it
+would route a child's frame down to a sibling). A frame from the **up-link** descends
+by ADR-0006's unchanged table — local, or the declared downlink — and a node outside
+the subtree now **drops** instead of reflecting. Relay invariants (FIFO, verbatim
+body/seq/t_dev, meaning-blind) hold; the arrival link is link-layer fact, not payload.
+Coverage closes at both gap layers: the router harness gains the ascend/reflect/
+sibling/spoof cases, and the VirtualHub NIF now compiles `router.c` so a host-level
+e2e (`two_hop_routing_e2e_test.exs`) drives a leaf's frames through the real C router
+both ways.
+
 ## 2026-06-25 — Turn becomes a closed yaw-rate loop, not open-loop differential speed (ADR-0009 amendment)
 
 ADR-0009's first build made **forward** a closed wheel-speed loop but **turn** an

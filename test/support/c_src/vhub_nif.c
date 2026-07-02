@@ -20,10 +20,13 @@
  *   decoder_feed(decoder_state, bytes)            -> {decoder_state, [body],
  * rx_drop} frame_decode_body(body, stamped)              -> {:ok, node, port,
  * seq} | :error
+ *   router_route(my_node, route_table, arrival_link, body, stamped)
+ *     -> {:deliver_local, body} | {:send_on_link, link, body} | :drop | :error
  */
 #include "erl_nif.h"
 #include "floor.h"
 #include "frame.h"
+#include "router.h"
 #include "transport.h"
 #include <string.h>
 
@@ -182,6 +185,79 @@ static ERL_NIF_TERM nif_frame_decode_body(ErlNifEnv *env, int argc,
       enif_make_uint(env, f.port), enif_make_uint(env, f.seq));
 }
 
+/* ---- router_route: one hop of the REAL C router (§08, ADR-0006/0011) ----
+ * Purely functional like everything here: the Router is rebuilt per call from
+ * (my_node, a 256-byte route table), the body is decoded by the real C frame
+ * path, routed with its ARRIVAL LINK, and whatever the sink captured is
+ * re-encoded by the real C encoder — the same decode → route → re-frame relay
+ * a root hub performs between its links. */
+
+typedef struct {
+  int local;    /* deliver_local fired */
+  int sent;     /* send_on_link fired */
+  uint8_t link; /* the link send_on_link chose */
+  Frame f;      /* the frame the sink saw (relay invariant: verbatim) */
+} RouteCapture;
+
+static void capture_local(const Frame *f, void *ctx_) {
+  RouteCapture *c = (RouteCapture *)ctx_;
+  c->local = 1;
+  c->f = *f;
+}
+
+static void capture_send(uint8_t link, const Frame *f, void *ctx_) {
+  RouteCapture *c = (RouteCapture *)ctx_;
+  c->sent = 1;
+  c->link = link;
+  c->f = *f;
+}
+
+static ERL_NIF_TERM nif_router_route(ErlNifEnv *env, int argc,
+                                     const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  unsigned int my_node, arrival_link;
+  ErlNifBinary table, body;
+  char stamped_atom[8];
+  if (!enif_get_uint(env, argv[0], &my_node) || my_node > 0xFF ||
+      !enif_inspect_binary(env, argv[1], &table) || table.size != 256 ||
+      !enif_get_uint(env, argv[2], &arrival_link) || arrival_link > 0xFF ||
+      !enif_inspect_binary(env, argv[3], &body) ||
+      !enif_get_atom(env, argv[4], stamped_atom, sizeof(stamped_atom),
+                     ERL_NIF_LATIN1))
+    return enif_make_badarg(env);
+  bool stamped = strcmp(stamped_atom, "true") == 0;
+
+  Frame f;
+  if (!frame_decode_body(body.data, body.size, stamped, &f))
+    return enif_make_atom(env, "error");
+
+  Router r;
+  r.my_node = (uint8_t)my_node;
+  memcpy(r.route_table, table.data, 256);
+
+  RouteCapture cap;
+  memset(&cap, 0, sizeof(cap));
+  RouterSinks sinks = {capture_local, capture_send, &cap};
+  router_route(&r, &f, (uint8_t)arrival_link, &sinks);
+
+  if (!cap.local && !cap.sent)
+    return enif_make_atom(env, "drop");
+
+  /* re-frame the captured frame with the real C encoder — the relay path */
+  uint8_t out[FRAME_MAX_BODY];
+  size_t n = frame_encode_body(&cap.f, out, sizeof(out));
+  if (n == 0)
+    return enif_make_atom(env, "error");
+  ERL_NIF_TERM out_bin;
+  unsigned char *p = enif_make_new_binary(env, n, &out_bin);
+  memcpy(p, out, n);
+
+  if (cap.local)
+    return enif_make_tuple2(env, enif_make_atom(env, "deliver_local"), out_bin);
+  return enif_make_tuple3(env, enif_make_atom(env, "send_on_link"),
+                          enif_make_uint(env, cap.link), out_bin);
+}
+
 static ErlNifFunc nif_funcs[] = {
     {"floor_init", 2, nif_floor_init, 0},
     {"floor_on_command", 3, nif_floor_on_command, 0},
@@ -190,6 +266,7 @@ static ErlNifFunc nif_funcs[] = {
     {"decoder_new", 0, nif_decoder_new, 0},
     {"decoder_feed", 2, nif_decoder_feed, 0},
     {"frame_decode_body", 2, nif_frame_decode_body, 0},
+    {"router_route", 5, nif_router_route, 0},
 };
 
 ERL_NIF_INIT(Elixir.BBMCUHub.Test.VHubNif, nif_funcs, NULL, NULL, NULL, NULL)

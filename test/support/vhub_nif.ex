@@ -71,5 +71,18 @@ defmodule BBMCUHub.Test.VHubNif do
           {:ok, node :: 0..255, port :: 0..255, seq :: 0..0xFFFF} | :error
   def frame_decode_body(_body, _stamped), do: nif_error()
 
+  @doc """
+  One hop of the REAL C router (direction-aware, meaning-blind). The `Router` is
+  rebuilt from `my_node` + a 256-byte `route_table` binary (`0xFF` = local, else
+  a local link index; link 0 = the up-link); the verified `body` is decoded by
+  the real C frame path, routed with the LOCAL LINK INDEX it ARRIVED on, and the
+  chosen sink's frame is re-framed by the real C encoder — the same
+  decode → route → re-frame relay a root hub runs between its links. A frame the
+  router refuses to forward (split horizon) comes back as `:drop`.
+  """
+  @spec router_route(0..255, binary(), 0..255, binary(), boolean()) ::
+          {:deliver_local, binary()} | {:send_on_link, 0..255, binary()} | :drop | :error
+  def router_route(_my_node, _route_table, _arrival_link, _body, _stamped), do: nif_error()
+
   defp nif_error, do: :erlang.nif_error(:nif_not_loaded)
 end

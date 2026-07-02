@@ -25,7 +25,8 @@ CHASSIS  := $(FW_SRC)/floor.c \
             $(FW_SRC)/frame.c \
             $(FW_SRC)/crc16.c \
             $(FW_SRC)/cobs.c \
-            $(FW_SRC)/transport.c
+            $(FW_SRC)/transport.c \
+            $(FW_SRC)/router.c
 
 SRC      := vhub_nif.c $(CHASSIS)
 TARGET   := $(PRIV)/vhub_nif.so
@@ -41,7 +42,7 @@ endif
 .PHONY: all clean
 all: $(TARGET)
 
-$(TARGET): $(SRC) $(FW_INC)/floor.h $(FW_INC)/frame.h $(FW_INC)/transport.h
+$(TARGET): $(SRC) $(FW_INC)/floor.h $(FW_INC)/frame.h $(FW_INC)/transport.h $(FW_INC)/router.h
 	mkdir -p $(PRIV)
 	$(CC) $(CFLAGS) $(INC) $(SRC) $(LDFLAGS) -o $(TARGET)
 

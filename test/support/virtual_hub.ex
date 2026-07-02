@@ -34,6 +34,23 @@ defmodule BBMCUHub.Test.VirtualHub do
 
   Time is explicit: nothing here reads a real clock. `tick(vhub, now_ms)` is the
   only thing that advances floors and emits status, so e2e tests are deterministic.
+
+  ## Two-hop mode: the real C router in the path
+
+  Pass `router: %{my_node: root_node, downlinks: %{leaf_node => link_idx}}` and the
+  VirtualHub plays a **tree**, not a single hub: every frame crossing the root runs
+  through the REAL C `router_route` (via `VHubNif.router_route/5`), exactly as the
+  root firmware relays between its links.
+
+    * Host → hub bodies arrive on the root's up-link (arrival 0) and are dispatched
+      by the route table: `deliver_local` feeds a root-local floor; `send_on_link(k)`
+      descends to the leaf's floor.
+    * A leaf port's status/sensor bodies arrive at the root on their downlink
+      (arrival k) and reach the host ONLY if the C router forwards them up (link 0)
+      — a router that reflects them back down (issue #9) makes the leaf invisible
+      to the host, which is precisely what the two-hop e2e pins.
+    * The root's own sense/status bodies bypass the router (`link_send_up` is a
+      direct send in the firmware) and go straight up, unchanged.
   """
   @behaviour BBMCUHub.Host.Transport
   use GenServer
@@ -163,6 +180,28 @@ defmodule BBMCUHub.Test.VirtualHub do
         {port_id, new_port(node, port_id, window_ms, status_port_id)}
       end)
 
+    # :router — %{my_node: root, downlinks: %{leaf_node => link_idx}} puts the REAL
+    # C router between the host seam and every non-root port (two-hop mode). The
+    # 256-byte route table is built exactly as the generated glue fills it: default
+    # 0 (up), my_node → 0xFF (local), each declared descendant → its downlink.
+    router =
+      case Keyword.get(opts, :router) do
+        nil ->
+          nil
+
+        %{my_node: my_node, downlinks: downlinks} ->
+          table =
+            for node <- 0..255, into: <<>> do
+              cond do
+                node == my_node -> <<0xFF>>
+                is_integer(Map.get(downlinks, node)) -> <<Map.fetch!(downlinks, node)>>
+                true -> <<0>>
+              end
+            end
+
+          %{my_node: my_node, table: table, downlinks: downlinks}
+      end
+
     # The host-bound direction runs through the REAL framing seam (FramingCOBS),
     # exactly as Circuits.UART does internally: we emit C-framed wire bytes, deframe
     # them here, and deliver only verified bodies up — so injected corruption is
@@ -175,6 +214,7 @@ defmodule BBMCUHub.Test.VirtualHub do
        decoder: VHubNif.decoder_new(),
        rx_framing: rx_framing,
        ports: ports,
+       router: router,
        now_ms: 0
      }}
   end
@@ -186,7 +226,7 @@ defmodule BBMCUHub.Test.VirtualHub do
     # the full wire path on the hub side, byte-for-byte, before reading the command.
     wire = VHubNif.transport_encode(body_bytes)
     {decoder, bodies, _drop} = VHubNif.decoder_feed(st.decoder, wire)
-    ports = Enum.reduce(bodies, st.ports, &on_command(&1, &2))
+    ports = Enum.reduce(bodies, st.ports, &descend(&1, &2, st.router))
     {:reply, :ok, %{st | decoder: decoder, ports: ports}}
   end
 
@@ -204,7 +244,7 @@ defmodule BBMCUHub.Test.VirtualHub do
 
   def handle_call({:emit_sensor, node, port_id, seq, type, value, stamped?}, _from, st) do
     body = Codec.encode_body(node, port_id, seq, seq, type, value, stamped?)
-    {:reply, :ok, deliver_body(st, body)}
+    {:reply, :ok, ascend(st, node, stamped?, body)}
   end
 
   def handle_call({:inject_wire, bytes}, _from, st) do
@@ -254,6 +294,42 @@ defmodule BBMCUHub.Test.VirtualHub do
 
   # --- internals ---
 
+  # Descend one verified host-origin body: in two-hop mode it crosses the root's
+  # REAL C router first (arrival: the up-link, 0) — `deliver_local` is a root
+  # port, a downlink send is the leaf behind the backplane; both floors live in
+  # the same port map here, but only a body the C router actually forwarded
+  # reaches one. Without a router (single-hub mode) the floors are fed directly.
+  defp descend(body, ports, nil), do: on_command(body, ports)
+
+  defp descend(body, ports, router) do
+    case VHubNif.router_route(router.my_node, router.table, 0, body, false) do
+      {:deliver_local, routed} -> on_command(routed, ports)
+      {:send_on_link, _link, routed} -> on_command(routed, ports)
+      _drop_or_error -> ports
+    end
+  end
+
+  # Ascend a hub-origin body toward the host. The root's own bodies go straight
+  # up (the firmware's `link_send_up` bypasses the router). A LEAF's body arrives
+  # at the root on its DOWNLINK and reaches the host ONLY if the real C router
+  # forwards it up (link 0) — the two-hop path issue #9 broke: a router that
+  # reflects it back down leaves the host blind to the leaf.
+  defp ascend(%{router: nil} = st, _node, _stamped?, body), do: deliver_body(st, body)
+
+  defp ascend(%{router: router} = st, node, stamped?, body) do
+    if node == router.my_node do
+      deliver_body(st, body)
+    else
+      arrival = Map.get(router.downlinks, node, 1)
+
+      case VHubNif.router_route(router.my_node, router.table, arrival, body, stamped?) do
+        {:send_on_link, 0, routed} -> deliver_body(st, routed)
+        # reflected back down, dropped, or misdelivered: the host never sees it
+        _ -> st
+      end
+    end
+  end
+
   # A decoded inbound body → feed the matching actuator port's floor (unless silenced).
   defp on_command(body, ports) do
     case VHubNif.frame_decode_body(body, false) do
@@ -294,8 +370,9 @@ defmodule BBMCUHub.Test.VirtualHub do
     Codec.encode_body(p.node, p.status_port_id, p.last_seq, p.last_seq, :status, value, false)
   end
 
-  # Emit this port's status up to the host through the REAL framing seam.
-  defp emit_status(st, p), do: deliver_body(st, status_body(p))
+  # Emit this port's status up to the host — through the root's C router first
+  # when the port lives on a leaf (two-hop mode), then the REAL framing seam.
+  defp emit_status(st, p), do: ascend(st, p.node, false, status_body(p))
 
   # Frame a body with the REAL C encoder, then push the wire bytes through the host's
   # framing seam (FramingCOBS) — mirroring the production UART driver, so a clean body

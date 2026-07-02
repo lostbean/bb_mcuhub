@@ -19,3 +19,4 @@ in a browser); the dated history is in
 | [0008](0008-virtual-robot-sim-in-the-loop.md)                | A robot can run virtually: a sim transport closes the host loop over a physics engine            |
 | [0009](0009-wheel-velocity-sensor-and-host-velocity-loop.md) | A wheel reports measured speed as a sensor port; the host closes a velocity loop (example-only)  |
 | [0010](0010-a-control-loop-falls-silent-on-disarm.md)        | A host control loop must fall silent on disarm — it produces the command-silence the floor needs |
+| [0011](0011-router-is-direction-aware.md)                    | The router is direction-aware: a downlink arrival ascends; the route table serves only descents  |

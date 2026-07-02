@@ -1133,28 +1133,36 @@ flowchart TB
           child link is <em>not</em> a port: ports name sense/act endpoints
           only, and a downstream hub is reached by addressing its own NODE,
           which the parent's route table maps to the <em>specific link</em> that
-          reaches it. Routing is therefore a flat table lookup on NODE through
-          the generated topology — <code>route_table[node] → link</code> — a
-          branch hub forwards a frame onto the one link (of possibly several
-          downlinks) that reaches that node, never a peer-name dispatch and
-          never a port on the parent. Link indices are <em>per-hub-local</em>:
-          each hub numbers its own links, with <b>link 0 the up-link</b> toward
-          its parent (the host UART for the root) and its downlinks
-          <code>1..N</code> (a shared CAN bus is one link, each point-to-point
-          UART its own). <b>SEQ</b> is the producing hub's own write counter,
-          bumped by one on every real new value; a relay hub copies it verbatim.
-          <b>T_DEV</b> is the producing hub's own 64-bit monotonic microseconds
-          at the write — carried for same-device use only (§04), 64-bit so a
-          hub's clock never wraps in the field; it is
-          <b>present only on ports that declare it</b> (stamped ports), so a
-          command or status frame omits it entirely. The decoder learns whether
-          a frame carries it from the <code>(NODE, PORT)</code> it just read, so
-          the optional field is never ambiguous. The CRC covers the whole
-          decoded body (NODE…PAYLOAD), so it guards the routing header across
-          every hop — the UART above the root hub and the CAN below it alike —
-          not just the payload. The same frame rides both transports; the root
-          hub re-frames it from one to the other without touching NODE, SEQ,
-          T_DEV, or PAYLOAD.
+          reaches it. NODE names <b>the hub end of a host↔hub conversation</b>,
+          so its meaning depends on direction: a descending command carries the
+          destination hub's node, an ascending sense/status frame carries the
+          <em>source</em> hub's node (the host end is implicit — no frame names
+          it). Routing is therefore decided by
+          <b>the link a frame arrives on</b>: a frame from a
+          <em>downlink</em> is ascending and forwards <b>up</b> unconditionally;
+          only a frame from the <em>up-link</em>
+          (the parent/host) descends by the flat table lookup —
+          <code>route_table[node] → link</code> — onto the one link (of possibly
+          several downlinks) that reaches that node, never a peer-name dispatch
+          and never a port on the parent. A descending frame for a node outside
+          the hub's subtree is dropped — a frame never exits the link it arrived
+          on. Link indices are <em>per-hub-local</em>: each hub numbers its own
+          links, with <b>link 0 the up-link</b> toward its parent (the host UART
+          for the root) and its downlinks <code>1..N</code> (a shared CAN bus is
+          one link, each point-to-point UART its own). <b>SEQ</b> is the
+          producing hub's own write counter, bumped by one on every real new
+          value; a relay hub copies it verbatim. <b>T_DEV</b> is the producing
+          hub's own 64-bit monotonic microseconds at the write — carried for
+          same-device use only (§04), 64-bit so a hub's clock never wraps in the
+          field; it is <b>present only on ports that declare it</b> (stamped
+          ports), so a command or status frame omits it entirely. The decoder
+          learns whether a frame carries it from the
+          <code>(NODE, PORT)</code> it just read, so the optional field is never
+          ambiguous. The CRC covers the whole decoded body (NODE…PAYLOAD), so it
+          guards the routing header across every hop — the UART above the root
+          hub and the CAN below it alike — not just the payload. The same frame
+          rides both transports; the root hub re-frames it from one to the other
+          without touching NODE, SEQ, T_DEV, or PAYLOAD.
         </p>
 
         <div class="callout bad">
@@ -2697,14 +2705,17 @@ flowchart TB
           </div>
           <pre
             class="code"
-          ><span class="c">/* Flat addressing (§03): NODE is a whole-tree-unique id, never a path. A branch</span>
-<span class="c">   hub forwards a frame onto the SPECIFIC link that reaches the dest node — a child</span>
-<span class="c">   link is NOT a port. It does NOT decode the payload and does NOT touch seq/t_dev.</span>
-<span class="c">   The host link is link 0; each link's transport (UART or CAN) is per-link, declared,</span>
-<span class="c">   so a parent may pick the right one of several downlinks (CAN bus + N UARTs). */</span>
-<span class="f">void</span> route_frame(<span class="f">const</span> Frame *f) {
+          ><span class="c">/* Flat addressing (§03): NODE is a whole-tree-unique id, never a path — and it names</span>
+<span class="c">   the HUB END of a host↔hub conversation (dest going down, SOURCE going up). So the</span>
+<span class="c">   first routing decision is the ARRIVAL LINK, not the node: a frame from a downlink</span>
+<span class="c">   is ascending and forwards up; only a frame from the parent descends by the table.</span>
+<span class="c">   It does NOT decode the payload and does NOT touch seq/t_dev. The up-link is link 0;</span>
+<span class="c">   each link's transport (UART or CAN) is per-link, declared. */</span>
+<span class="f">void</span> route_frame(<span class="f">const</span> Frame *f, <span class="f">int</span> arrival_link) {
+  <span class="k">if</span> (arrival_link != 0) { forward(0, f); <span class="k">return</span>; }  <span class="c">/* from a child: ascending, host-bound — always up */</span>
   <span class="k">if</span> (f-&gt;node == MY_NODE) { deliver_local(f); <span class="k">return</span>; }   <span class="c">/* an endpoint port on THIS hub */</span>
   <span class="f">int</span> link = route_table[f-&gt;node];     <span class="c">/* generated: which local link reaches this NODE */</span>
+  <span class="k">if</span> (link == 0) <span class="k">return</span>;                <span class="c">/* not in my subtree: drop — never back out the arrival link */</span>
   forward(link, f);                     <span class="c">/* FIFO, in order: re-frame for THAT transport + re-CRC the SAME body; seq unchanged */</span>
 }</pre>
         </div>

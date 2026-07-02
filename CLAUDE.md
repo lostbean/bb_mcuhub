@@ -124,7 +124,7 @@ calibration**, which is a bench step.)
 - **Do not reference ADRs in user-facing documentation** — that is README.md,
   `docs/NEW-ROBOT.md`, `firmware/README.md`, the example's docs, and every
   `@moduledoc` / `@doc` / Spark `doc:` string (anything that lands on hexdocs
-  or in `mix help`). State the decision's *content* in plain prose instead;
+  or in `mix help`). State the decision's _content_ in plain prose instead;
   when the pointer matters for maintainers, put the `ADR-NNNN` reference in a
   **code comment** (or a generated-header comment / verifier error string).
   ADR references stay first-class in the design layer only: `CONTEXT.md`,

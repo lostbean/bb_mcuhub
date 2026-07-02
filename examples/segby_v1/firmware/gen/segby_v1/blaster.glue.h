@@ -115,15 +115,16 @@ static void send_on_link(uint8_t link, const Frame *f, void *) {
 
 
 /* Meaning-blind inbound (§04): decode the body (CRC-clean at the seam), learn
-   t_dev-ness per port just-in-time, route by NODE → a LOCAL LINK INDEX
-   (ADR-0006). seq/t_dev never touched. */
-extern "C" void hub_on_body(const uint8_t *body, size_t len) {
+   t_dev-ness per port just-in-time, route by DIRECTION + NODE (ADR-0006,
+   ADR-0011): a downlink arrival ascends to link 0; a parent arrival is
+   dispatched by NODE → a LOCAL LINK INDEX. seq/t_dev never touched. */
+extern "C" void hub_on_body(uint8_t arrival_link, const uint8_t *body, size_t len) {
   if (len < FRAME_HEADER_BASE_SIZE) return;
   Frame f;
   bool stamped = wire_port_stamped(body[0], body[1]); /* per-port t_dev (§04) */
   if (!frame_decode_body(body, len, stamped, &f)) return;
   RouterSinks sinks = {deliver_local, send_on_link, nullptr};
-  router_route(&g_router, &f, &sinks);
+  router_route(&g_router, &f, arrival_link, &sinks);
 }
 extern "C" void hub_setup(void) {
   g_router.my_node = MY_NODE;

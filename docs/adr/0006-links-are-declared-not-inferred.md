@@ -1,5 +1,11 @@
 # Topology is declared by parent links, not inferred from node ids; a link is a first-class edge
 
+_Amended by ADR-0011: the `node → link` route table serves only DESCENDING
+frames (arrival on the up-link). A frame arriving on a downlink is ascending
+host-bound traffic and forwards up unconditionally — the table lookup this ADR
+describes must not be applied to it (doing so reflected every leaf→host frame
+back down; issue #9)._
+
 A robot's tree is authored by each hub **declaring its parent and the transport of
 the link up to that parent** — `parent: :blaster, uplink: :uart` — with the root
 hub declaring `parent: :host` (the host link is always UART). A **link** (the edge

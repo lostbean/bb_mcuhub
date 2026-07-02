@@ -121,8 +121,14 @@ extern "C" {
 #endif
 #endif
 
-/* Callback the runtime sets: a verified body arrived from some link. */
-static void (*g_on_body)(const uint8_t *body, size_t len) = nullptr;
+/* Callback the runtime sets: a verified body arrived, tagged with the LOCAL
+ * LINK INDEX it came in on — the router routes by direction (ADR-0011). */
+static void (*g_on_body)(uint8_t arrival_link, const uint8_t *body,
+                         size_t len) = nullptr;
+
+/* The one backplane this board realizes: downlink 1 on a root, the up-link
+ * (0) on a leaf. IS_ROOT folds at preprocess time. */
+#define BACKPLANE_LINK_IDX (IS_ROOT ? 1 : 0)
 
 #if LINK1_TRANSPORT_UART
 /* The UART backplane is a streaming COBS+CRC seam (transport.c), exactly like
@@ -131,7 +137,7 @@ static TransportDecoder g_bp_rx;
 
 static void bp_body_cb(const uint8_t *body, size_t len, void *) {
   if (g_on_body)
-    g_on_body(body, len);
+    g_on_body(BACKPLANE_LINK_IDX, body, len);
 }
 
 /* Legible failure counters (§03). On a UART backplane there is no
@@ -162,7 +168,7 @@ uint32_t link_rx_crc_fail(void) { return g_can_rx.rx_crc_fail; }
  */
 static void can_body_cb(const uint8_t *body, size_t len, void *) {
   if (g_on_body)
-    g_on_body(body, len);
+    g_on_body(BACKPLANE_LINK_IDX, body, len);
 }
 #endif
 
@@ -171,12 +177,14 @@ static TransportDecoder
     g_uart_rx; /* the host UART seam — only the root hub has one */
 
 static void uart_body_cb(const uint8_t *body, size_t len, void *) {
+  /* the host UART is the root's up-link: arrival link 0 (from the parent) */
   if (g_on_body)
-    g_on_body(body, len);
+    g_on_body(0, body, len);
 }
 #endif
 
-void link_set_on_body(void (*cb)(const uint8_t *body, size_t len)) {
+void link_set_on_body(void (*cb)(uint8_t arrival_link, const uint8_t *body,
+                                 size_t len)) {
   g_on_body = cb;
 }
 

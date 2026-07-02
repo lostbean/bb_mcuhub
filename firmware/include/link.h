@@ -19,7 +19,13 @@ extern "C" {
 /* --- the link layer (firmware/src/esp32/link_esp32.cpp) --- */
 void link_begin(void);
 void link_pump(void);
-void link_set_on_body(void (*cb)(const uint8_t *body, size_t len));
+
+/* A verified body arrived; `arrival_link` is the LOCAL LINK INDEX it came in
+ * on (0 = the up-link from the parent/host; >= 1 = that downlink). The router
+ * needs the direction to know whether the frame's NODE is a source or a
+ * destination (ADR-0011). */
+void link_set_on_body(void (*cb)(uint8_t arrival_link, const uint8_t *body,
+                                 size_t len));
 
 /* Send a frame on a per-hub-local LINK INDEX (ADR-0006). Link 0 is the up-link
  * (host UART on the root, parent backplane on a leaf); downlinks are 1..N. The
@@ -45,7 +51,7 @@ uint32_t link_rx_crc_fail(void);
 
 /* --- supplied by each board sketch (hubs/<hub>/mcu/main_*.cpp) --- */
 void hub_setup(void);
-void hub_on_body(const uint8_t *body, size_t len);
+void hub_on_body(uint8_t arrival_link, const uint8_t *body, size_t len);
 Task *hub_tasks(size_t *n_tasks);
 
 #ifdef __cplusplus
