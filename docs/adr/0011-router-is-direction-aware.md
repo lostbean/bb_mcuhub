@@ -122,3 +122,10 @@ routing decision.**
   in ascending traffic reaches the host under the lie (node identity remains
   trust-on-first-use, as before this ADR) — but it can no longer _steer_
   frames anywhere except up.
+- **The traffic model becomes a named invariant.** "Every conversation is
+  host↔hub; hubs never converse with each other" is promoted from an implicit
+  assumption to a first-class design invariant (`docs/hub-design.html` ·
+  Invariants; `CONTEXT.md` · Host↔hub conversations). The direction rule is
+  its enforcement: the hub tree is a tree at the transport level but a star
+  at the conversation level. Any future hub↔hub path must revisit this ADR
+  and bring its own authentication story.

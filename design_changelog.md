@@ -40,6 +40,13 @@ sibling/spoof cases, and the VirtualHub NIF now compiles `router.c` so a host-le
 e2e (`two_hop_routing_e2e_test.exs`) drives a leaf's frames through the real C router
 both ways.
 
+The review also promoted the underlying traffic model to a **named invariant**:
+every conversation on the wire is host↔hub — hubs never converse with each other
+(hub-design.html · Invariants; CONTEXT.md · Host↔hub conversations). The hubs exist
+to reach hardware from the host, not to form a distributed system among themselves;
+the direction rule is that invariant's wire-level enforcement, and any future
+hub↔hub path must revisit ADR-0011 with its own authentication story.
+
 ## 2026-06-25 — Turn becomes a closed yaw-rate loop, not open-loop differential speed (ADR-0009 amendment)
 
 ADR-0009's first build made **forward** a closed wheel-speed loop but **turn** an

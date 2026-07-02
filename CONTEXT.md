@@ -182,6 +182,23 @@ that never reorders, holds, batches, or dedupes. This in-order guarantee is the
 precondition that makes the **advance** test sound. Conflation (deferred) may drop
 superseded frames but must preserve per-`(node, port)` order.
 
+### Host↔hub conversations (the only traffic model — an invariant)
+
+Every conversation on the wire is between the **host** and exactly one **hub**: a
+descending frame is a command from the host; an ascending frame is sense/status toward
+the host. **Hubs never converse with each other** — a hub cannot command its parent, a
+sibling, or any other hub. The router makes this structural, not conventional
+(ADR-0011): a frame arriving on a downlink can only ascend, so the host side is the
+sole origin of descending traffic at every hub, regardless of what a frame's NODE
+claims. This is the wire-level footing under **one writer per slot** and the floor's
+command-silence test — neither needs source authentication because the topology admits
+only one command origin. A future hub↔hub path (say, a reflex between hubs) must be
+designed deliberately, with its own authentication story — never inherited as a
+routing side effect.
+_Avoid_: treating the hub tree as a general mesh or distributed system. It is a tree
+at the transport level but a star at the conversation level — every conversation has
+the host at one end.
+
 ### fresh_for · born-stale
 
 Each consumer declares a `fresh_for` window as a multiple of the producer's nominal
