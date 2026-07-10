@@ -10,6 +10,34 @@ Format: newest first. Dates are absolute.
 
 ---
 
+## 2026-07-02 — A link self-test is a boot-time build mode; the always-on stats port is rejected (ADR-0012, resolves issue #8)
+
+The `segby_v1` bench found that a hub link is only debuggable by arming the whole
+robot: `BRINGUP.md` Stage 1 assumes a loopback test the chassis never provided —
+no diagnostic output, no self-test mode, no unprompted transmission — so "is this
+board's Serial2 path dead?" cost an afternoon of safety-chain arming and SSH
+registry-reading (issue #8). Resolved by ADR-0012 as a **static boot-time build
+mode**, not a runtime toggle: a `BB_SELFTEST` PlatformIO env (flags inherited from
+the production env by reference, so the tested config cannot drift) boots the
+board into a loopback tester — a pure, host-tested C core (`selftest.c`, explicit
+time, settle-timeout so silence terminates) behind a thin ESP32 runner that drives
+each realized link through the **production** `link_begin()` and prints a pinned,
+greppable per-link PASS/FAIL line on UART0/USB every ~2 s. Two rules got pinned
+along the way: UART0/USB is reserved as the out-of-band diagnostic console (a
+channel must never be the sole witness of its own health — no link may ever claim
+it), and the only production-code touch is `hub_main.cpp`'s added
+`!defined(BB_SELFTEST)` guard, keeping the production binary byte-identical. The
+issue's companion proposal — an always-on generated `link_stats` diagnostic port —
+was **rejected, not deferred**: a permanent stock value-type + per-hub port +
+contract-hash churn on every robot is production entropy against a diagnostic need
+the contained boot mode already answers; a new `link_rx_drop(link)` accessor
+exposes the decoder drop counters (including the previously unreadable host-seam
+one) to any future surface. UART runner ships in v1; the CAN runner is deferred
+with its proof tiers pinned (TWAI no-ack self-reception; through-transceiver as
+tier two) until hardware exists. With ADR-0011 in place, a self-test board
+cross-wired to a live parent cannot false-PASS — its frames ascend and die at the
+host as an unknown port, never reflected.
+
 ## 2026-07-02 — The router becomes direction-aware: a downlink arrival ascends; the table serves only descents (ADR-0011, amends ADR-0006)
 
 A consumer report from the `segby_v1` two-board bring-up (issue #9) exposed a wrong

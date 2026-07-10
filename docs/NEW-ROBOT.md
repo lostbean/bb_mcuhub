@@ -533,11 +533,36 @@ A fully-commented, ready-to-adapt template lives at
 to `<your-app>/firmware/platformio.ini` and replace the marked placeholders
 (`<slug>`, `<hub>`, `<path>`, `0xNN`, `<baud>`).
 
+**Give every board env a self-test sibling.** The chassis ships a link self-test
+boot mode: flash a `*_selftest` env and the board boots as a loopback tester —
+jumper a link's RX↔TX and read one PASS/FAIL verdict per link on the USB console
+(`pio device monitor`), no host and no robot. The bring-up guide leans on it to
+verify links one board at a time. A few lines of ini per board:
+
+```ini
+[env:myboard_selftest]
+build_flags =
+  ${env:myboard.build_flags}
+  -DBB_SELFTEST=1
+build_src_filter =
+  +<mcu/selftest_stub.cpp>
+```
+
+The production env's flags are inherited **by reference**, so the pins/baud/node
+the test certifies can never drift from the config the robot actually runs.
+`mcu/selftest_stub.cpp` is a one-time file you copy from the example
+([`mcu/selftest_stub.cpp`](../examples/segby_v1/firmware/mcu/selftest_stub.cpp)) —
+its only role is to pull the chassis into a build that compiles no device file.
+Note the sibling inherits `build_flags` only: a production env's extra `lib_deps`
+(e.g. a motor library) stay out, since the self-test needs just the base chassis.
+UART links only for now — a build with a CAN backplane reports FAIL honestly;
+its self-test procedure is a future addition.
+
 **Why sixth:** an env needs both the generated headers (Step 4) and the device file
 (Step 5) to compile.
 
-**Check it worked:** `pio run -e <hub>_root` (and `-e <hub>_leaf` for each leaf)
-compiles clean.
+**Check it worked:** `pio run -e <hub>_root` (and `-e <hub>_leaf` for each leaf,
+plus each `*_selftest` sibling) compiles clean.
 
 <details>
 <summary>The chassis dep, and how an external consumer points lib_deps</summary>

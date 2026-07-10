@@ -28,6 +28,7 @@ bb_mcuhub-*.tar
 /firmware/test/router_harness
 /firmware/test/segment_harness
 /firmware/test/uart_backplane_harness
+/firmware/test/selftest_harness
 *.o
 
 # PlatformIO

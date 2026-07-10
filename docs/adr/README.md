@@ -20,3 +20,4 @@ in a browser); the dated history is in
 | [0009](0009-wheel-velocity-sensor-and-host-velocity-loop.md) | A wheel reports measured speed as a sensor port; the host closes a velocity loop (example-only)  |
 | [0010](0010-a-control-loop-falls-silent-on-disarm.md)        | A host control loop must fall silent on disarm — it produces the command-silence the floor needs |
 | [0011](0011-router-is-direction-aware.md)                    | The router is direction-aware: a downlink arrival ascends; the route table serves only descents  |
+| [0012](0012-link-selftest-is-a-boot-time-build-mode.md)      | A link self-test is a boot-time build mode; its USB verdict is out-of-band by invariant          |

@@ -27,6 +27,9 @@ SEGMENT_SRC := $(ROOT)/firmware/src/segment.c $(ROOT)/firmware/src/crc16.c \
 UART_BACKPLANE_SRC := $(ROOT)/firmware/src/transport.c $(ROOT)/firmware/src/crc16.c \
                       $(ROOT)/firmware/src/cobs.c $(ROOT)/firmware/src/frame.c \
                       test_uart_backplane.c
+SELFTEST_SRC := $(ROOT)/firmware/src/selftest.c $(ROOT)/firmware/src/transport.c \
+                $(ROOT)/firmware/src/crc16.c $(ROOT)/firmware/src/cobs.c \
+                $(ROOT)/firmware/src/frame.c test_selftest.c
 
 .PHONY: all run clean
 all: run
@@ -46,7 +49,10 @@ segment_harness: $(SEGMENT_SRC) $(ROOT)/firmware/include/segment.h
 uart_backplane_harness: $(UART_BACKPLANE_SRC) $(ROOT)/firmware/include/transport.h
 	$(CC) $(CFLAGS) $(INC) $(UART_BACKPLANE_SRC) -o uart_backplane_harness
 
-run: parity_harness floor_harness router_harness segment_harness uart_backplane_harness
+selftest_harness: $(SELFTEST_SRC) $(ROOT)/firmware/include/selftest.h
+	$(CC) $(CFLAGS) $(INC) $(SELFTEST_SRC) -o selftest_harness
+
+run: parity_harness floor_harness router_harness segment_harness uart_backplane_harness selftest_harness
 	./parity_harness
 	@echo
 	./floor_harness
@@ -56,6 +62,8 @@ run: parity_harness floor_harness router_harness segment_harness uart_backplane_
 	./segment_harness
 	@echo
 	./uart_backplane_harness
+	@echo
+	./selftest_harness
 
 clean:
-	rm -f parity_harness floor_harness router_harness segment_harness uart_backplane_harness
+	rm -f parity_harness floor_harness router_harness segment_harness uart_backplane_harness selftest_harness

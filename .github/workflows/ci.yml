@@ -3,8 +3,9 @@
 #   - C firmware floor/wire path (host-compiled harnesses + the test-only NIF)
 #
 # What is intentionally NOT here (see README "Status"): the ESP32 `pio run`
-# firmware build (downloads a 100s-of-MB toolchain — too heavy for every push;
-# run it locally / on a release), the MuJoCo sim (example-only, opt-in via uv;
+# firmware build — the production envs AND the `*_selftest` link self-test envs
+# alike (downloads a 100s-of-MB toolchain — too heavy for every push; run it
+# locally / on a release), the MuJoCo sim (example-only, opt-in via uv;
 # the sim's Elixir tests use a fake child and need no Python), and the WDT
 # boot-loop / motor-sign calibration (bench/QEMU only, by design).
 #

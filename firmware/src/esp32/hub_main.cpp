@@ -6,7 +6,7 @@
  * The concrete hub (its tasks[] table from schedule.gen.h, its tick functions,
  * and on_command) is supplied by the board sketch, which #includes its hub's
  * mcu/*.c and schedule.gen.h and defines hub_setup()/the task table. */
-#if defined(ARDUINO)
+#if defined(ARDUINO) && !defined(BB_SELFTEST)
 
 #include "esp_task_wdt.h"
 #include <Arduino.h>
