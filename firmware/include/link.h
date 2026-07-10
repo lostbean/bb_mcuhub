@@ -49,6 +49,14 @@ uint32_t link_rx_frag_orphan(void);
 uint32_t link_rx_frag_drop(void);
 uint32_t link_rx_crc_fail(void);
 
+/* Inbound drops on ONE local link index — the decoder/reassembler discard
+ * count for whatever peripheral realizes that link on this board (a corrupt or
+ * truncated frame, dropped and counted, never delivered partial). Covers the
+ * root's host-UART seam too, whose decoder counted drops nothing could read
+ * before. An unrealized link reads 0. The link self-test runner reports this
+ * counter's per-session delta (ADR-0012). */
+uint32_t link_rx_drop(uint8_t link);
+
 /* --- supplied by each board sketch (hubs/<hub>/mcu/main_*.cpp) --- */
 void hub_setup(void);
 void hub_on_body(uint8_t arrival_link, const uint8_t *body, size_t len);

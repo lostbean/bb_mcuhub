@@ -90,3 +90,23 @@ build_flags =
   -DMY_NODE=0xNN
 build_src_filter =
   +<mcu/<hub>.cpp>
+
+; ---------------------------------------------------------------------------
+;  SELF-TEST sibling env — one per board. Flash it and the board boots as a
+;  link loopback tester: jumper a link's RX<->TX and read one PASS/FAIL verdict
+;  per link on the USB console (pio device monitor); no host, no robot. The
+;  production env's build_flags are inherited BY REFERENCE, so the pins/baud/
+;  node a PASS certifies can never drift from the config the robot actually
+;  runs. It inherits build_flags ONLY: a board's extra lib_deps (e.g. a motor
+;  library) stay out — the self-test needs just the base chassis.
+;  mcu/selftest_stub.cpp is a one-time file copied from the worked example
+;  (examples/segby_v1/firmware/mcu/selftest_stub.cpp); its only role is to pull
+;  the chassis into a build that compiles no device file.
+; ---------------------------------------------------------------------------
+[env:<hub>_selftest]
+build_flags =
+  ; reference the env this board actually runs: <hub>_root or <hub>_leaf
+  ${env:<hub>_root.build_flags}
+  -DBB_SELFTEST=1
+build_src_filter =
+  +<mcu/selftest_stub.cpp>

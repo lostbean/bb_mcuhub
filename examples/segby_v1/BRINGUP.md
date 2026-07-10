@@ -18,9 +18,10 @@ are the half only real hardware can prove.
 
 **Bench kit:** the three boards, 2× USB cables (flashing/monitoring), jumper
 wires, a common-ground 12 V supply for the motors, a stand or leash for the
-chassis, and — strongly recommended for Stages 1–2 — a logic analyzer or scope
-(the firmware prints nothing to the USB console by design; the wire itself is
-the observable).
+chassis, and — for Stage 2, and as the Stage-1 fallback — a logic analyzer or
+scope. Production firmware prints nothing to the USB console by design (the
+wire itself is the observable); the one exception is Stage 1's self-test boot
+mode, which prints its per-link verdicts there.
 
 ## Boards & roles
 
@@ -123,18 +124,64 @@ motor stays disabled (born-disarmed) but the board still boots and the link come
 up. (A hung `initFOC` = a motor/encoder wiring problem, Stage 3 — but the UART
 must still come up.)
 
-### Stage 1 — loopback each board's backplane UART (no cross-wire yet)
+### Stage 1 — self-test each board's links (loopback jumper, no cross-wire yet)
 
-Prove each board's own UART2 path before trusting the link. Jumper the board's own
-backplane TX↔RX:
+Prove each board's own UART paths before trusting any inter-board wiring. The
+firmware ships a **link self-test boot mode**: flash a board's `*_selftest` env
+and it boots as a loopback tester — it drives every link the board realizes
+through the production TX/RX path and prints one PASS/FAIL verdict per link on
+the USB console. No host, no robot, no other board:
 
-- **Blaster**: jumper GPIO 26 ↔ 27.
-- **Wheels**: jumper GPIO 17 ↔ 16.
-  Every frame the board sends echoes straight back to itself. **Observe it on the
-  wire, not the console** (the firmware logs nothing): a logic analyzer or scope
-  on the jumpered pins shows periodic COBS frames (`0x00`-delimited bursts) —
-  the board's own status traffic. A silent pin ⇒ that board's UART path is
-  broken (pin map / silicon), not the inter-board wiring.
+```sh
+pio run -e blaster_selftest -t upload   # or: wheels_selftest for the MKS board
+pio device monitor                      # verdicts at 115200
+```
+
+The self-test env inherits the production env's build flags by reference, so
+the pins/baud/node a PASS certifies are exactly what `blaster_root` /
+`wheels_leaf` run — the tested config cannot drift from the robot's. Jumper the
+link under test RX↔TX (a jumper displaces the cable — that displacement **is**
+the electrical split, so the rest of the robot can stay assembled):
+
+- **Blaster** (root, two links): host UART = GPIO 16 ↔ 17; backplane =
+  GPIO 27 ↔ 26.
+- **Wheels** (leaf, one link): backplane = GPIO 16 ↔ 17.
+
+The cycle repaints roughly every 2 s — move the jumper and watch FAIL flip to
+PASS live, no reflash between attempts. The Blaster with only its backplane
+jumpered prints:
+
+```
+BB_SELFTEST node=0x02 root=1
+link0 host-uart Serial1 rx=16 tx=17 baud=115200: FAIL echoed=0/100 rx_drop=+0   <- jumper 16<->17 or pin dead
+link1 backplane Serial2 rx=27 tx=26 baud=1000000: PASS echoed=100/100 rx_drop=+0
+```
+
+(The Wheels board prints `BB_SELFTEST node=0x05 root=0` and a single
+`link0 backplane Serial2 rx=16 tx=17 baud=1000000` line.)
+
+Reading a verdict at the bench:
+
+- **PASS** — this board's TX→RX path works electrically, at the production
+  pins and baud. Done with this link.
+- **FAIL with the jumper seated** — the pin or the board is dead, not the
+  cable or the peer (the jumper took both out of the loop). The hint on the
+  line names this board's actual RX/TX pins: confirm the jumper really sits on
+  those two, then suspect the pin map or the silicon.
+- **`rx_drop=+N` climbing while `echoed` stays short of the sent count** —
+  bytes arrive but frames die in the decoder (CRC/framing): a marginal or
+  lossy link, not a dead one. Suspect baud, noise, or grounding.
+
+Test one board at a time and the failure space splits by itself: if both
+boards PASS here but frames still don't cross in Stage 2, the fault is the
+inter-board wire — a PASS has already cleared each end's TX and RX.
+
+The logic analyzer is the **fallback**, not the first tool: reach for it only
+for what the self-test can't see — analog signal quality on a marginal link,
+or the cross-wired inter-board run (Stage 2's job).
+
+When every link PASSes, reflash the production envs (`blaster_root` /
+`wheels_leaf`) — Stage 2 needs the real firmware back on the boards.
 
 ### Stage 2 — cross-wire the backplane, confirm frames cross
 
