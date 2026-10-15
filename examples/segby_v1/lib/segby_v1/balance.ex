@@ -637,35 +637,14 @@ defmodule SegbyV1.Balance do
     %{state | enabled: on?, pid: %{state.pid | integral: 0.0, prev_error: 0.0}}
   end
 
-  # Command both wheels by publishing a typed Effort to each actuator topic. We
-  # do NOT write any slot directly — the actuator view is the single writer
-  # (§04); it pattern-matches exactly this `%BB.Message{payload: %Effort{}}` on
-  # `[:actuator | path]` and turns it into a slot write.
-  #
-  # We build the message struct directly rather than via `BB.Actuator.set_effort/4`:
-  # that helper passes `duration: nil` to `BB.Message.new!`, which the Effort
-  # schema rejects (`duration` is an optional :pos_integer with no default, so the
-  # key must be OMITTED, not nil). A bare struct sidesteps that and is exactly the
-  # shape the view (and the §02 slice tracer) expects.
-  # DISARMED: publish nothing. The wheels' command slots stop advancing, the floor
-  # sees command-silence, and the hub reaches its safe state (§05 / ADR-0010). A
-  # controller that kept commanding through disarm would re-arm the floor every
-  # tick and defeat the disarm — so the safe-state action IS to fall silent.
+  # Core bb stamps and dispatches each effort; the actuator view alone writes
+  # its slot. Broadcast delivery keeps this control loop asynchronous.
+  # While disarmed, command-silence lets the hub floor reach its safe state.
   defp command(%{armed: false}, _mixed), do: :ok
 
   defp command(state, %{left: left, right: right}) do
-    BB.publish(state.bb.robot, [:actuator | state.left_path], effort_message(left))
-    BB.publish(state.bb.robot, [:actuator | state.right_path], effort_message(right))
+    BB.Actuator.set_effort(state.bb.robot, state.left_path, left, delivery: :broadcast)
+    BB.Actuator.set_effort(state.bb.robot, state.right_path, right, delivery: :broadcast)
     :ok
-  end
-
-  defp effort_message(nm) do
-    %BB.Message{
-      monotonic_time: System.monotonic_time(:nanosecond),
-      wall_time: System.system_time(:nanosecond),
-      node: Node.self(),
-      frame_id: :effort,
-      payload: %BB.Message.Actuator.Command.Effort{effort: nm * 1.0}
-    }
   end
 end

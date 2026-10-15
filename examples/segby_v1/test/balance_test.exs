@@ -321,10 +321,10 @@ defmodule SegbyV1.BalanceTest do
   describe "the controller commands both wheels via Effort (never writes a slot)" do
     @robot SegbyV1.Robot
     @pose_topic [:sensor, :base_link, :chassis_imu]
-    # distinct actuator paths so our test process is the SOLE subscriber and the
-    # real views (not started here) can't compete.
-    @left [:test, :left_drive]
-    @right [:test, :right_drive]
+    # Use declared actuator paths so the public command API can validate them.
+    # The real views are not started in these publication-only tests.
+    @left [:base_link, :left_wheel, :left_drive]
+    @right [:base_link, :right_wheel, :right_drive]
     # the measured-wheel-speed sensor topics (ADR-0009) the velocity loop reads.
     @vel_left_topic [:sensor, :base_link, :vel_left]
     @vel_right_topic [:sensor, :base_link, :vel_right]

@@ -50,7 +50,7 @@ defmodule SegbyV1.MixProject do
       # The BeamBots framework — the seam the robot + controllers sit on (§09).
       # SegbyV1.Balance gates its output on disarm via the documented
       # `[:state_machine]` subscription, so no framework fork is needed (ADR-0010).
-      {:bb, bb_dep("~> 0.20")},
+      {:bb, bb_dep("~> 0.25")},
       # The terminal dashboard over the BeamBots seam (§09). ONLY segby uses it, so
       # it lives here (the library no longer depends on bb_tui — ADR-0003). It
       # provides two GENERIC extensions segby relies on: configurable

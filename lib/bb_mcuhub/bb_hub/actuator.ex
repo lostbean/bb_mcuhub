@@ -40,6 +40,27 @@ defmodule BBMCUHub.BBHub.Actuator do
   alias BBMCUHub.Host.Registry.Writer
   alias BBMCUHub.ValueType
 
+  # The port's wire vocabulary, declared to the framework: this actuator accepts
+  # exactly the ONE command struct its value-type names, and `BB.Actuator.Server`
+  # subscribes `[:actuator | path]` on our behalf filtered to it, refusing
+  # anything else before it reaches `handle_command/2`. So the derived filter the
+  # view used to install with its own `BB.subscribe/2` is unchanged in effect
+  # (finding #1 / the agnostic Component — the struct comes from the value-type,
+  # never a literal `Effort`), and a consumer's OWN command struct is admitted
+  # too, which BB's built-in payload list would have dropped.
+  #
+  # The verifier requires a non-nil command_message on every command port, so this
+  # is never `[nil]`. Asked before `init/1`, so it resolves the port itself; an
+  # unresolvable port falls back to the framework's own list, leaving `init/1` to
+  # fail loud with the named `{:unknown_port, _}`.
+  @impl BB.Actuator
+  def command_payloads(opts) do
+    case PortIndex.resolve(opts[:hub], opts[:port]) do
+      {:ok, {node_id, port_id}} -> [command_value_type(node_id, port_id).command_message()]
+      :error -> BB.Actuator.default_command_payloads()
+    end
+  end
+
   @impl BB.Actuator
   def init(opts) do
     bb = Keyword.fetch!(opts, :bb)
@@ -49,21 +70,10 @@ defmodule BBMCUHub.BBHub.Actuator do
 
     with {:ok, {node_id, port_id}} <- PortIndex.resolve(hub, port),
          {:ok, {^node_id, status_id}} <- PortIndex.resolve(hub, status_port) do
-      # Resolve the command port's value-type module FIRST, so the subscribe can
-      # derive its message_types from the value-type rather than hard-coding one.
+      # Resolve the command port's value-type module once, so `handle_command/2`
+      # unlifts generically, never hard-coding a struct shape (finding #1 / the
+      # agnostic Component).
       value_type = command_value_type(node_id, port_id)
-
-      # Subscribe to our own command topic so a controller's published command (the
-      # §04 single-writer flow: a controller is a pure producer, the view is the
-      # sole slot writer) reaches `handle_info/2`. The subscribe filters by the
-      # struct the value-type NAMES (`command_message/0`) — derived, never the
-      # literal `Effort` — so a consumer's own command surfaces through this same
-      # view (finding #1 / the agnostic Component). The verifier guarantees a
-      # command port's value-type declares a non-nil command_message, so this is
-      # safe. `BB.publish(robot, [:actuator | path], %Cmd{})` lands here; we write
-      # the slot and notify the link owner. (The direct `{:command, msg}` cast —
-      # set_effort!/3 — is also handled.)
-      BB.subscribe(bb.robot, [:actuator | bb.path], message_types: [value_type.command_message()])
 
       # the status slot is read THROUGH a born-stale monitor (§05): a stale "not
       # floored" must never read as driving, so the view ticks the monitor on its
@@ -98,24 +108,21 @@ defmodule BBMCUHub.BBHub.Actuator do
   # A BeamBots command → write our ONE command slot. The link owner drains it to
   # the wire; the floor decides whether the hub acts on it. We are the sole writer
   # of this slot, so each write advances the command seq exactly once.
+  #
+  # Every transport lands here — published, cast or called — and `bb` hands us
+  # only the struct `command_payloads/1` declared, so `unlift/1` is total.
   @impl BB.Actuator
-  def handle_info({:bb, _topic, %BB.Message{payload: payload}}, st) do
+  def handle_command(%BB.Message{payload: payload}, st) do
     {:noreply, write_command(st, st.value_type.unlift(payload))}
   end
 
   # tick the status freshness monitor on our own beat (§04/§05)
+  @impl BB.Actuator
   def handle_info(:status_beat, st) do
     {:noreply, %{st | status_mon: Monitor.check(st.status_mon)}}
   end
 
   def handle_info(_other, st), do: {:noreply, st}
-
-  @impl BB.Actuator
-  def handle_cast({:command, %BB.Message{payload: payload}}, st) do
-    {:noreply, write_command(st, st.value_type.unlift(payload))}
-  end
-
-  def handle_cast(_other, st), do: {:noreply, st}
 
   # disarm/1 runs WITHOUT GenServer state (BB calls it with the init opts) — so
   # everything it needs is in opts, and its return means "intent delivered", NOT

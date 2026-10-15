@@ -10,18 +10,19 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
   (`PositionVT`) that:
 
     * names a DIFFERENT `BB.Message` command struct via `command_message/0`
-      (`BB.Message.Actuator.Command.Position`, a 4-field struct), so the actuator
-      view's PubSub subscribe is DERIVED from it — proving the `Effort`
-      hard-coding is gone (the subscribe would otherwise filter `Position` out
+      (`BB.Message.Actuator.Command.Position`, a 4-field struct), so the payload
+      the view declares to `BB.Actuator.Server` — which subscribes and gates the
+      command topic with it — is DERIVED from it, proving the `Effort`
+      hard-coding is gone (a hard-coded `Effort` would filter `Position` out
       before the generic `unlift`);
     * has a multi-field wire **layout** (`position`, `velocity` — two `:f32`s) with
       a REAL `lift`/`unlift` to/from the `Position` struct (not an identity map);
 
   and drives it through the REAL wire path: a published `Position` command →
   actuator view (sole writer) → command slot → LinkOwner drain → wire (COBS+CRC) →
-  decodes back to the two layout fields. This exercises `command_message`
-  (subscribe) + generic `unlift` + the multi-field layout together — the three
-  pieces finding #1 had to make compose.
+  decodes back to the two layout fields. This exercises `command_message` (the
+  declared payload) + generic `unlift` + the multi-field layout together — the
+  three pieces finding #1 had to make compose.
 
   ## The struct we used
 
@@ -45,8 +46,8 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
     A consumer-style command value-type with TWO `:f32` layout fields and a real
     (non-identity) lift/unlift to `BB.Message.Actuator.Command.Position`. Its
     `command_message/0` names `Position`, NOT `Effort` — so the actuator view that
-    resolves it subscribes to `Position` and a published `Position` reaches the
-    view. Proves the un-hard-coding (finding #1).
+    resolves it declares `Position` and a published `Position` reaches the view.
+    Proves the un-hard-coding (finding #1).
     """
     use BBMCUHub.ValueType
 
@@ -106,18 +107,22 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
     end
 
     topology do
-      # VIEW-LESS (candidate 5): the tests drive a ViewHarness actuator view by
-      # hand, so the robot must NOT also start a production actuator view for the
-      # same command slot — two writers of one slot is exactly what the sole-writer
-      # capability (§07) refuses. The joint skeleton stays; the actuator view does
-      # not. (A producer with no reader view is well-formed — reconciliation is
-      # reader→producer.)
       link :base_link do
         joint :drive_joint do
           type(:continuous)
 
           axis do
           end
+
+          limit do
+            effort(~u(10 newton_meter))
+            velocity(~u(3 radian_per_second))
+          end
+
+          actuator(
+            :drive,
+            {BBHub.Actuator, hub: :pos_hub, port: :pos_cmd, status_port: :pos_status}
+          )
 
           link :drive_link do
           end
@@ -131,6 +136,7 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
     PortIndex.build(Robot)
 
     start_supervised!(%{id: BB.Supervisor, start: {BB.Supervisor, :start_link, [Robot]}})
+    :ok = BB.Safety.arm(Robot)
     :ok
   end
 
@@ -138,8 +144,9 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
     test "a published Position reaches the view, is unlifted generically, and lands as the right bytes" do
       {:ok, {m_node, m_port}} = PortIndex.resolve(:pos_hub, :pos_cmd)
 
-      # the value-type's OWN contract names Position, not Effort — the subscribe is
-      # derived from this, so the un-hard-coding is what lets the command through
+      # the value-type's OWN contract names Position, not Effort — the view's
+      # declared payload is derived from this, so the un-hard-coding is what lets
+      # the command through
       assert PositionVT.command_message() == BB.Message.Actuator.Command.Position
 
       {:ok, owner} =
@@ -151,22 +158,11 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
       on_exit(fn -> if Process.alive?(owner), do: GenServer.stop(owner) end)
       transport = :sys.get_state(owner).transport
 
-      {:ok, view} =
-        BBMCUHub.Test.ViewHarness.start(
-          BBHub.Actuator,
-          bb: %{robot: Robot, path: [:base_link, :drive_joint, :drive]},
-          hub: :pos_hub,
-          port: :pos_cmd,
-          status_port: :pos_status
+      :ok =
+        BB.Actuator.set_position(Robot, :drive, 1.57,
+          velocity: 0.5,
+          delivery: :broadcast
         )
-
-      # a BeamBots Position command (NOT Effort) arrives at the view via PubSub —
-      # the subscribe derived from command_message is what lets it through
-      cmd = %BB.Message{
-        payload: %BB.Message.Actuator.Command.Position{position: 1.57, velocity: 0.5}
-      }
-
-      send(view, {:bb, [:actuator, :base_link, :drive_joint, :drive], cmd})
 
       # the slot was written (sole writer), drained, and the wire carries BOTH
       # multi-field-layout fields — generic unlift + multi-field layout end-to-end
@@ -193,33 +189,40 @@ defmodule BBMCUHub.BBHub.ActuatorCommandTest do
     test "the unlifted command slot holds the full multi-field map (generic unlift is exact)" do
       {:ok, {m_node, m_port}} = PortIndex.resolve(:pos_hub, :pos_cmd)
 
-      # no LinkOwner here: assert directly on what the view WROTE to the slot, so
-      # the multi-field generic unlift is checked without the wire roundtrip.
-      {:ok, view} =
-        BBMCUHub.Test.ViewHarness.start(
-          BBHub.Actuator,
-          bb: %{robot: Robot, path: [:base_link, :drive_joint, :drive]},
-          hub: :pos_hub,
-          port: :pos_cmd,
-          status_port: :pos_status
+      :ok =
+        BB.Actuator.set_position(Robot, :drive, -0.25,
+          velocity: 2.0,
+          delivery: :broadcast
         )
 
-      cmd = %BB.Message{
-        payload: %BB.Message.Actuator.Command.Position{position: -0.25, velocity: 2.0}
-      }
-
-      send(view, {:bb, [:actuator, :base_link, :drive_joint, :drive], cmd})
-
-      assert_eventually(fn ->
-        case NodeRegistry.get(m_node, m_port) do
-          {%{position: _, velocity: _}, _seq, _t} -> true
-          _ -> false
-        end
-      end)
+      # Wait for the real actuator server to consume the broadcast.
+      :sys.get_state(BB.Process.whereis(Robot, :drive))
+      assert {%{position: -0.25, velocity: 2.0}, 1, _} = NodeRegistry.get(m_node, m_port)
 
       {value, _seq, _t} = NodeRegistry.get(m_node, m_port)
       assert_in_delta value.position, -0.25, 1.0e-5
       assert_in_delta value.velocity, 2.0, 1.0e-5
+    end
+
+    test "the port's own struct is the only payload the view declares, so nothing else reaches unlift" do
+      {:ok, {m_node, m_port}} = PortIndex.resolve(:pos_hub, :pos_cmd)
+
+      opts = [
+        bb: %{robot: Robot, path: [:base_link, :drive_joint, :drive]},
+        hub: :pos_hub,
+        port: :pos_cmd,
+        status_port: :pos_status
+      ]
+
+      # what the framework asks the view for, and then both subscribes and gates
+      # the command topic with — derived from the value-type, never a literal
+      assert BBHub.Actuator.command_payloads(opts) == [BB.Message.Actuator.Command.Position]
+
+      # Effort is a core command, but not this custom port's vocabulary. The
+      # real server rejects it before calling the Position-only unlift/1.
+      :ok = BB.Actuator.set_effort(Robot, :drive, 0.42, delivery: :broadcast)
+      :sys.get_state(BB.Process.whereis(Robot, :drive))
+      assert NodeRegistry.get(m_node, m_port) == nil
     end
   end
 

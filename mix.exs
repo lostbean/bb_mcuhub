@@ -65,7 +65,7 @@ defmodule BBMCUHub.MixProject do
       # subscription, so no framework fork is needed (ADR-0010). `BB_VERSION` lets
       # the beam-bots workspace run this package against an in-development `bb`
       # (`local` → `../bb`) in its cross-package integration tests.
-      {:bb, bb_dep("~> 0.20")},
+      {:bb, bb_dep("~> 0.25")},
       # The host owns a UART to the root hub (§07); Circuits.UART provides the
       # framing behaviour our COBS+CRC framer implements (§03). A consumer pulls
       # this in transitively (Host.Transport.UART uses it).

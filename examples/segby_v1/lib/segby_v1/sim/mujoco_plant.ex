@@ -140,7 +140,7 @@ defmodule SegbyV1.Sim.MujocoPlant do
     child_mod = Keyword.get(opts, :child, Port)
     mjcf = Keyword.get(opts, :mjcf, @default_mjcf)
 
-    child_opts = Keyword.get(opts, :child_opts, port_child_opts(mjcf))
+    child_opts = Keyword.get_lazy(opts, :child_opts, fn -> port_child_opts(mjcf) end)
 
     {:ok, child} = child_mod.open(child_opts)
 
