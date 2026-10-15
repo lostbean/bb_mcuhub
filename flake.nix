@@ -14,9 +14,7 @@
   description = "bb_mcuhub — Elixir host + ESP32 firmware dev environment";
 
   inputs = {
-    # nixos-unstable: it ships the exact toolchain versions this project targets
-    # — elixir 1.19.5 (~> 1.19), platformio 6.1.19 (matches the .pio-venv core),
-    # clang 21.x, lefthook. (Switch to "nixos-25.05" for the stable channel.)
+    # flake.lock pins patch versions; named shells cover the CI version lines.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     flake-utils.url = "github:numtide/flake-utils";
@@ -36,6 +34,9 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        beam28 = pkgs.beam.packages.erlang_28;
+        beam29 = pkgs.beam.packages.erlang_29;
+        defaultElixir = beam28.elixir_1_19;
 
         # macOS needs a libpython symlink so the example's `mjpython` viewer works
         # (ADR-0008); the shellHook below is guarded on this.
@@ -46,6 +47,7 @@
           projectRootFile = "flake.nix";
 
           programs.mix-format.enable = true; # Elixir — uses .formatter.exs
+          programs.mix-format.package = defaultElixir;
           programs.nixfmt.enable = true; # Nix — RFC-style (official)
           programs.prettier.enable = true; # Markdown / YAML / JSON
           programs.shfmt.enable = true; # Shell
@@ -76,73 +78,80 @@
             "scripts/design-schema.json"
           ];
         };
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            # --- Elixir host stratum ---
-            # Elixir 1.19 on OTP 28 (both pinned to erlang_28 so `mix` and the
-            # standalone BEAM agree). OTP 28 is required by nerves_system_rpi0_2
-            # ~> 2.0 (the OTP-28 line the Pi runs); a 1.19-on-OTP-27 elixir makes
-            # `mix firmware` fail the host/target OTP-major check. Satisfies the
-            # apps' `elixir ~> 1.19` (the `bb` dep >= 0.22 requires ~> 1.19).
-            beam.packages.erlang_28.elixir_1_19 # Elixir 1.19.x on OTP 28
-            erlang_28 # OTP 28 — matches the elixir above + nerves rpi0_2 2.x
 
-            # --- C / ESP32 firmware stratum ---
-            platformio # `pio run` for the ESP32 envs (6.1.x)
-            clang # cc/clang for firmware/test host harnesses
-            gnumake # `cd firmware/test && make`
-            pkg-config # vintage_net_wifi's host NIF needs it (Nerves firmware build)
-            # Nerves host tooling for `mix firmware` (assemble the rpi0_2 .fw image):
-            fwup # assembles + burns/uploads the .fw image (mix firmware / upload)
-            squashfsTools # mksquashfs — the root filesystem image
-            xz # firmware payload compression
-            coreutils-prefixed # GNU coreutils as g-prefixed (Nerves wants `gstat` on macOS)
+        mkDevShell =
+          beam: elixirPackage:
+          pkgs.mkShell {
+            packages = with pkgs; [
+              # --- Elixir host stratum ---
+              # Use the same OTP for Elixir and the standalone Erlang tools.
+              elixirPackage
+              beam.erlang
 
-            # --- example sim stratum (ADR-0008: virtual robot, EXAMPLE-only) ---
-            # The segby_v1 example can run virtually against MuJoCo. MuJoCo itself
-            # comes from PyPI into a project-local .venv via uv (it does not build
-            # on Darwin via nixpkgs); nix only supplies the interpreter + uv. The
-            # shipped library/firmware/host runtime are untouched — this is opt-in
-            # tooling for `examples/segby_v1/sim` (its pyproject.toml + Python child).
-            python312 # the interpreter uv's .venv is built from (mjpython wheels)
-            uv # resolves examples/segby_v1/sim/pyproject.toml into a .venv
+              # --- C / ESP32 firmware stratum ---
+              platformio # `pio run` for the ESP32 envs (6.1.x)
+              clang # cc/clang for firmware/test host harnesses
+              gnumake # `cd firmware/test && make`
+              pkg-config # vintage_net_wifi's host NIF needs it (Nerves firmware build)
+              # Nerves host tooling for `mix firmware` (assemble the rpi0_2 .fw image):
+              fwup # assembles + burns/uploads the .fw image (mix firmware / upload)
+              squashfsTools # mksquashfs — the root filesystem image
+              xz # firmware payload compression
+              coreutils-prefixed # GNU coreutils as g-prefixed (Nerves wants `gstat` on macOS)
 
-            # --- shared dev tooling ---
-            lefthook # pre-commit format gate (run `lefthook install`)
-            git
-          ];
+              # --- example sim stratum (ADR-0008: virtual robot, EXAMPLE-only) ---
+              # The segby_v1 example can run virtually against MuJoCo. MuJoCo itself
+              # comes from PyPI into a project-local .venv via uv (it does not build
+              # on Darwin via nixpkgs); nix only supplies the interpreter + uv. The
+              # shipped library/firmware/host runtime are untouched — this is opt-in
+              # tooling for `examples/segby_v1/sim` (its pyproject.toml + Python child).
+              python312 # the interpreter uv's .venv is built from (mjpython wheels)
+              uv # resolves examples/segby_v1/sim/pyproject.toml into a .venv
 
-          # PlatformIO downloads its platform/toolchains into PLATFORMIO_CORE_DIR
-          # at first `pio run`. Default it to a worktree-local, gitignored path so
-          # each worktree keeps its own core dir and never touches the main tree's
-          # .pio-core. The existing manual workflow that sets PLATFORMIO_CORE_DIR
-          # explicitly still wins (we only set it if unset).
-          shellHook = ''
-            export PLATFORMIO_CORE_DIR="''${PLATFORMIO_CORE_DIR:-$PWD/.pio-core}"
-            echo "bb_mcuhub devShell: elixir $(elixir --version | tail -1 | cut -d' ' -f2), $(pio --version)"
-            echo "  PLATFORMIO_CORE_DIR=$PLATFORMIO_CORE_DIR"
-          ''
-          # macOS: the example sim's `mjpython` re-execs the .venv python from inside
-          # a Cocoa .app bundle, then dlopens libpython3.12.dylib relative to it via
-          # @executable_path/../lib/. uv's .venv layout doesn't ship that dylib, so
-          # symlink the one from the uv-managed interpreter (ADR-0008). Scoped to the
-          # example's sim .venv; a no-op until `uv sync` has created it.
-          + pkgs.lib.optionalString isDarwin ''
+              # --- shared dev tooling ---
+              lefthook # pre-commit format gate (run `lefthook install`)
+              git
+            ];
 
-            sim_venv="$PWD/examples/segby_v1/sim/.venv"
-            if [ -f "$sim_venv/bin/python" ] && [ ! -e "$sim_venv/lib/libpython3.12.dylib" ]; then
-              real_python=$(readlink -f "$sim_venv/bin/python" 2>/dev/null || true)
-              if [ -n "$real_python" ]; then
-                py_lib_dir="$(dirname "$(dirname "$real_python")")/lib"
-                if [ -f "$py_lib_dir/libpython3.12.dylib" ]; then
-                  ln -sf "$py_lib_dir/libpython3.12.dylib" "$sim_venv/lib/libpython3.12.dylib"
-                  echo "  [sim] linked libpython3.12.dylib into $sim_venv/lib (mjpython)"
+            # PlatformIO downloads its platform/toolchains into PLATFORMIO_CORE_DIR
+            # at first `pio run`. Default it to a worktree-local, gitignored path so
+            # each worktree keeps its own core dir and never touches the main tree's
+            # .pio-core. The existing manual workflow that sets PLATFORMIO_CORE_DIR
+            # explicitly still wins (we only set it if unset).
+            shellHook = ''
+              export PLATFORMIO_CORE_DIR="''${PLATFORMIO_CORE_DIR:-$PWD/.pio-core}"
+              echo "bb_mcuhub devShell: elixir $(elixir --version | tail -1 | cut -d' ' -f2), $(pio --version)"
+              echo "  PLATFORMIO_CORE_DIR=$PLATFORMIO_CORE_DIR"
+            ''
+            # macOS: the example sim's `mjpython` re-execs the .venv python from inside
+            # a Cocoa .app bundle, then dlopens libpython3.12.dylib relative to it via
+            # @executable_path/../lib/. uv's .venv layout doesn't ship that dylib, so
+            # symlink the one from the uv-managed interpreter (ADR-0008). Scoped to the
+            # example's sim .venv; a no-op until `uv sync` has created it.
+            + pkgs.lib.optionalString isDarwin ''
+
+              sim_venv="$PWD/examples/segby_v1/sim/.venv"
+              if [ -f "$sim_venv/bin/python" ] && [ ! -e "$sim_venv/lib/libpython3.12.dylib" ]; then
+                real_python=$(readlink -f "$sim_venv/bin/python" 2>/dev/null || true)
+                if [ -n "$real_python" ]; then
+                  py_lib_dir="$(dirname "$(dirname "$real_python")")/lib"
+                  if [ -f "$py_lib_dir/libpython3.12.dylib" ]; then
+                    ln -sf "$py_lib_dir/libpython3.12.dylib" "$sim_venv/lib/libpython3.12.dylib"
+                    echo "  [sim] linked libpython3.12.dylib into $sim_venv/lib (mjpython)"
+                  fi
                 fi
               fi
-            fi
-          '';
+            '';
+          };
+
+      in
+      {
+        devShells = rec {
+          # Nerves builds require the host's OTP major to match the target.
+          default = elixir-1_19-otp-28;
+          elixir-1_19-otp-28 = mkDevShell beam28 defaultElixir;
+          elixir-1_20-otp-28 = mkDevShell beam28 beam28.elixir_1_20;
+          elixir-1_20-otp-29 = mkDevShell beam29 beam29.elixir_1_20;
         };
 
         # `nix fmt` runs treefmt across the repo.

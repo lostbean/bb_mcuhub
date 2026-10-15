@@ -26,16 +26,8 @@ permissions:
   contents: read
 
 env:
-  # Pin to the toolchain the flake pins (Elixir 1.19 on OTP 28 — the line the
-  # Pi runs; see flake.nix). Keep these in lockstep with flake.nix. The `bb`
-  # dependency (>= 0.22) requires elixir ~> 1.19, so 1.18 can no longer resolve it.
-  ELIXIR_VERSION: "1.19.5"
-  OTP_VERSION: "28.0"
-  # Hex 2.5.0 (released 2026-06-28) calls `:re.import/3`, removed in OTP 28's
-  # PCRE2 `:re` — so it crashes on startup before `mix deps.get` runs. setup-beam
-  # installs the latest Hex and has no version input, so pin the last working one
-  # explicitly until a Hex > 2.5.0 fixes the OTP-28 break. (The devShell uses 2.4.2.)
-  HEX_VERSION: "2.4.2"
+  # Hex 2.5.1 fixed the cross-OTP compiled-regex crash; use the current patch.
+  HEX_VERSION: "2.5.3"
 
 jobs:
   # --- Elixir library (root app :bb_mcuhub) -------------------------------
@@ -43,23 +35,27 @@ jobs:
   # (the :test-only compilers gate in mix.exs), so this job needs a C compiler —
   # ubuntu-latest ships one. The C parity + drift tests run inside this suite.
   library:
-    name: Library (${{ matrix.bb }}, Elixir + C NIF)
+    name: Library (Elixir ${{ matrix.beam.elixir }}, OTP ${{ matrix.beam.otp }}, bb ${{ matrix.bb }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         bb: [locked, minimum]
+        # Explicit pairs: Elixir 1.19 does not support OTP 29.
+        beam:
+          - { elixir: "1.19.5", otp: "28.5.0.6" }
+          - { elixir: "1.20.4", otp: "28.5.0.6" }
+          - { elixir: "1.20.4", otp: "29.1" }
     steps:
       - uses: actions/checkout@v5
 
       - name: Set up Erlang/Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ matrix.beam.otp }}
+          elixir-version: ${{ matrix.beam.elixir }}
 
-      # setup-beam installs the latest Hex (2.5.0), which crashes on OTP 28 (see
-      # the HEX_VERSION note above). Pin a working Hex before any mix command.
-      - name: Pin Hex (OTP-28 compatible)
+      - name: Pin Hex
         run: mix local.hex ${{ env.HEX_VERSION }} --force
 
       - name: Cache deps and _build
@@ -68,9 +64,9 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-lib-${{ matrix.bb }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-lib-${{ matrix.bb }}-${{ matrix.beam.otp }}-${{ matrix.beam.elixir }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-lib-${{ matrix.bb }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-mix-lib-${{ matrix.bb }}-${{ matrix.beam.otp }}-${{ matrix.beam.elixir }}-
 
       - name: Select minimum supported bb
         if: matrix.bb == 'minimum'
@@ -93,11 +89,17 @@ jobs:
   # (lostbean/bb, mcass19/bb_tui). Its suite includes the example's drift test;
   # the sim tests use a fake child, so no Python/MuJoCo is needed here.
   example:
-    name: Example (${{ matrix.bb }}, segby_v1)
+    name: Example (Elixir ${{ matrix.beam.elixir }}, OTP ${{ matrix.beam.otp }}, bb ${{ matrix.bb }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         bb: [locked, minimum]
+        # Explicit pairs: Elixir 1.19 does not support OTP 29.
+        beam:
+          - { elixir: "1.19.5", otp: "28.5.0.6" }
+          - { elixir: "1.20.4", otp: "28.5.0.6" }
+          - { elixir: "1.20.4", otp: "29.1" }
     defaults:
       run:
         working-directory: examples/segby_v1
@@ -107,12 +109,10 @@ jobs:
       - name: Set up Erlang/Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ matrix.beam.otp }}
+          elixir-version: ${{ matrix.beam.elixir }}
 
-      # setup-beam installs the latest Hex (2.5.0), which crashes on OTP 28 (see
-      # the HEX_VERSION note above). Pin a working Hex before any mix command.
-      - name: Pin Hex (OTP-28 compatible)
+      - name: Pin Hex
         run: mix local.hex ${{ env.HEX_VERSION }} --force
 
       - name: Cache deps and _build
@@ -121,9 +121,9 @@ jobs:
           path: |
             examples/segby_v1/deps
             examples/segby_v1/_build
-          key: ${{ runner.os }}-mix-segby-${{ matrix.bb }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('examples/segby_v1/mix.lock') }}
+          key: ${{ runner.os }}-mix-segby-${{ matrix.bb }}-${{ matrix.beam.otp }}-${{ matrix.beam.elixir }}-${{ hashFiles('examples/segby_v1/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-segby-${{ matrix.bb }}-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-mix-segby-${{ matrix.bb }}-${{ matrix.beam.otp }}-${{ matrix.beam.elixir }}-
 
       - name: Select minimum supported bb
         if: matrix.bb == 'minimum'

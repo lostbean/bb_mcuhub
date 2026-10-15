@@ -451,8 +451,28 @@ contract. `mix ci` is the one-command local gate (format check +
 warnings-as-errors compile + full suite), the same thing
 [CI](.github/workflows/ci.yml) runs.
 
-Elixir 1.19+ is required. The declared `bb` requirement is `~> 0.25`; CI tests
-both the 0.25 minimum and the locked 0.33 release.
+Elixir 1.19+ is required. CI runs the library and example suites on each of
+these toolchain pairs, against both the minimum `bb` 0.25 and locked 0.33:
+
+| Elixir | Erlang/OTP |
+| ------ | ---------- |
+| 1.19   | 28         |
+| 1.20   | 28, 29     |
+
+Elixir 1.19 does not support OTP 29; use Elixir 1.20 for that runtime.
+The Nix development shell stays on Elixir 1.19 / OTP 28 to match the example's
+Nerves firmware target. The CI matrix covers the host library and example;
+it does not validate Nerves firmware on OTP 29. Select a local toolchain with:
+
+```sh
+nix develop                         # Elixir 1.19 / OTP 28 (Nerves compatible)
+nix develop .#elixir-1_20-otp-28
+nix develop .#elixir-1_20-otp-29
+```
+
+Nix pins patch versions in `flake.lock`; CI pins its patches independently.
+`nix fmt` always uses the default shell's Elixir, so formatting stays consistent
+when switching shells.
 
 ### Troubleshooting the borders
 

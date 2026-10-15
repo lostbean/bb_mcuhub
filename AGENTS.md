@@ -56,7 +56,9 @@ does **not** work in a fresh worktree — use the devShell instead.)
 - **Dev shell** — run `nix develop` from the repo root to enter a shell with
   Elixir 1.19, Erlang/OTP, PlatformIO 6.1, clang, make, and lefthook. Or let
   direnv load it automatically (`direnv allow` once). Inputs are pinned in
-  `flake.lock`.
+  `flake.lock`. This default is Elixir 1.19 / OTP 28 for Nerves builds. Use
+  `nix develop .#elixir-1_20-otp-28` or `nix develop .#elixir-1_20-otp-29` to
+  exercise the other CI version pairs; Nix and CI pin patches independently.
 - **Formatting** — `nix fmt` formats the whole repo via treefmt (mix-format for
   Elixir, nixfmt, prettier for MD/YAML/JSON, shfmt, clang-format for C).
 - **Commit gate** — a lefthook `pre-commit` hook formats staged files and
