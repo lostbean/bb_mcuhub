@@ -117,14 +117,14 @@ The architecture, its rationale, and the `§` section numbers live in
 defp deps do
   [
     {:bb_mcuhub, path: "../.."},        # the library
-    {:bb, "~> 0.20"},                   # the BeamBots framework — the robot sits on it
+    {:bb, "~> 0.25"},                   # the BeamBots framework — the robot sits on it
     {:bb_tui, github: "mcass19/bb_tui"} # optional dashboard
   ]
 end
 ```
 
-> `{:bb, "~> 0.20"}` is the published form (it resolves to `bb` >= 0.22 today,
-> which is what requires Elixir 1.19+). The example's `mix.exs` wraps it in a
+> `{:bb, "~> 0.25"}` is the published form; Elixir 1.19+ is required.
+> The example's `mix.exs` wraps it in a
 > `bb_dep/1` `BB_VERSION` switch so the beam-bots workspace can resolve `bb`
 > from a sibling checkout for cross-package integration tests; normal builds
 > use hex unchanged.

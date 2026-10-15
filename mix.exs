@@ -4,7 +4,7 @@ defmodule BBMCUHub.MixProject do
   def project do
     [
       app: :bb_mcuhub,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       # The generated parity vectors are data the C parity test reads, not a
@@ -141,7 +141,8 @@ defmodule BBMCUHub.MixProject do
       licenses: ["Apache-2.0"],
       # Ship the prose the docs config lists as extras — hexdocs builds from the
       # package tarball, so an extra not in `files` silently vanishes there.
-      files: ~w(lib mix.exs README.md LICENSE docs/design/CONTEXT.md docs/NEW-ROBOT.md),
+      files:
+        ~w(lib mix.exs README.md CHANGELOG.md LICENSE docs/design/CONTEXT.md docs/NEW-ROBOT.md),
       # Absolute URLs — Hex renders these on the package page (relative paths 404).
       links: %{
         "GitHub" => "https://github.com/lostbean/bb_mcuhub",
@@ -159,6 +160,7 @@ defmodule BBMCUHub.MixProject do
       main: "readme",
       extras: [
         "README.md",
+        "CHANGELOG.md",
         "docs/design/CONTEXT.md": [title: "Glossary (CONTEXT)"],
         "docs/NEW-ROBOT.md": [title: "Build your own robot"]
       ],

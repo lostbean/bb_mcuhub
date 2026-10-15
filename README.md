@@ -401,9 +401,9 @@ ordinary published-package forms — **no shape change**.
 
 ```elixir
 # in-tree example uses:  {:bb_mcuhub, path: "../.."}
-# an external consumer:  {:bb_mcuhub, "~> 0.1"}        # Hex, when published
+# an external consumer:  {:bb_mcuhub, "~> 0.2"}        # Hex, when published
 #                   or:  {:bb_mcuhub, github: "..."}   # git
-{:bb, "~> 0.20"}                                       # the BeamBots framework
+{:bb, "~> 0.25"}                                       # the BeamBots framework
 ```
 
 **Firmware (`platformio.ini`):**
@@ -451,9 +451,8 @@ contract. `mix ci` is the one-command local gate (format check +
 warnings-as-errors compile + full suite), the same thing
 [CI](.github/workflows/ci.yml) runs.
 
-Elixir 1.19+ is required: the declared `bb` requirement is `~> 0.20`, but the
-repo locks (and CI tests against) `bb` 0.22+, which itself requires Elixir
-`~> 1.19`.
+Elixir 1.19+ is required. The declared `bb` requirement is `~> 0.25`; CI tests
+both the 0.25 minimum and the locked 0.33 release.
 
 ### Troubleshooting the borders
 
